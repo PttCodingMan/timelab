@@ -31,7 +31,7 @@ THUMBS = ROOT / "thumbs"   # 故意放在 dist 外面
 DEFAULT_SHOT = {
     "width": 1200,
     "height": 750,
-    "freeze": "2026-01-01T10:09:02",
+    "freeze": "2026-01-01T09:06:02",
     "settle": 3000,
 }
 
