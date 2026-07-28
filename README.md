@@ -122,9 +122,17 @@ GitHub Pages 自動有 HTTPS，PWA 的安裝條件直接滿足。
 
 需要先做的設定：
 
-1. **Settings → Pages → Source 選 `GitHub Actions`**，不是 `Deploy from a branch`。
-   選錯的話 `deploy-pages` 會直接失敗。workflow 裡的 `configure-pages@v5`
-   加了 `enablement: true`，多數情況會幫你自動開起來。
+1. **第一次要自己把 Pages 開起來**：Settings → Pages → Build and deployment →
+   Source 選 `GitHub Actions`，不是 `Deploy from a branch`。等價的指令：
+
+   ```bash
+   gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow
+   ```
+
+   workflow 裡的 `configure-pages@v5` 雖然帶了 `enablement: true`，但**不要指望它**——
+   它是拿 job 的 `GITHUB_TOKEN` 去呼叫建立 Pages site 的 API，那顆 token 通常沒有這個
+   權限，第一次 push 會停在這一步並回 `Resource not accessible by integration`。
+   自己的 `gh` token（有 `repo` scope）才過得了。開好之後這個 step 只是讀設定，不會再擋。
 2. workflow 觸發的分支寫死 `main`，預設分支叫 `master` 的話要改。
 
 已知的限制：
