@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>翻頁時鐘</title>
+<meta name="description" content="黑白翻頁時鐘，機場看板調性，時:分兩張大牌，24 小時制。">
+<meta name="theme-color" content="#08090a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="翻頁時鐘">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --void:#08090a;
+    --ink:#f2f3f5;
+    --ctrl:#5a5d66;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--void);overflow:hidden;overscroll-behavior:none}
+  body{
+    font-family:'Inter','Helvetica Neue',Helvetica,Arial,sans-serif;
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+  }
+
+  #stage{
+    position:fixed;inset:0;
+    display:flex;align-items:center;justify-content:center;
+    background:
+      radial-gradient(ellipse 60% 55% at 50% 40%, rgba(255,255,255,.06), transparent 70%),
+      var(--void);
+  }
+
+  #board{
+    --cw:min(38vw,62vh);
+    --ch:calc(var(--cw) / 1.25);
+    --gap:calc(var(--cw) * 0.10);
+    display:flex;align-items:center;gap:var(--gap);
+  }
+  @media (max-aspect-ratio: 4/5){
+    #board{ --cw:min(82vw,33vh); flex-direction:column; }
+  }
+
+  .card{
+    position:relative;
+    width:var(--cw); height:var(--ch);
+    perspective:calc(var(--cw) * 2.2);
+    filter:drop-shadow(0 calc(var(--cw)*0.03) calc(var(--cw)*0.09) rgba(0,0,0,.55));
+  }
+  .pane,.leaf{
+    position:absolute; left:0; width:100%; height:50%;
+    overflow:hidden;
+    background:linear-gradient(#1b1c1f,#0d0e10);
+  }
+  .pane.top,.leaf.top{ top:0; border-radius:calc(var(--cw)*.045) calc(var(--cw)*.045) 0 0; }
+  .pane.bot,.leaf.bot{ bottom:0; border-radius:0 0 calc(var(--cw)*.045) calc(var(--cw)*.045); }
+  .leaf{ backface-visibility:hidden; will-change:transform; }
+  .leaf.top{ transform-origin:center bottom; }
+  .leaf.bot{ transform-origin:center top; }
+  .pane::after,.leaf::after{
+    content:'';
+    position:absolute; inset:0;
+    background:#000;
+    opacity:var(--sh,0);
+    pointer-events:none;
+  }
+  .pane span,.leaf span{
+    display:block; width:100%;
+    font-size:calc(var(--cw) * 0.64);
+    line-height:var(--ch);
+    font-weight:500; letter-spacing:-0.02em;
+    font-variant-numeric:tabular-nums;
+    text-align:center;
+    color:var(--ink);
+  }
+  .pane.bot span,.leaf.bot span{
+    transform:translateY(calc(var(--ch) * -0.5));
+  }
+  .seam{
+    position:absolute; left:0; right:0; top:calc(50% - 1.5px); height:3px;
+    background:#000;
+    box-shadow:0 2px 0 rgba(255,255,255,.07);
+    pointer-events:none;
+  }
+  /* 轉軸凹槽：接縫高度、牌的左右兩側各一個小半圓 */
+  .card::before,.card::after{
+    content:'';
+    position:absolute; top:50%; width:calc(var(--cw)*.045); height:calc(var(--cw)*.045);
+    border-radius:50%;
+    background:#0d0e10;
+    box-shadow:inset 0 1px 2px rgba(0,0,0,.75);
+    transform:translateY(-50%);
+    pointer-events:none;
+  }
+  .card::before{ left:calc(var(--cw) * -0.018); }
+  .card::after{ right:calc(var(--cw) * -0.018); }
+
+  #ctrl{
+    position:fixed; right:max(16px, env(safe-area-inset-right));
+    bottom:max(16px, env(safe-area-inset-bottom));
+    display:flex; gap:8px;
+    transition:opacity .5s ease;
+  }
+  button{
+    font:inherit; font-size:12px; letter-spacing:.04em;
+    color:var(--ink); background:transparent; border:1px solid var(--ctrl);
+    padding:8px 12px; border-radius:6px; cursor:pointer; touch-action:manipulation;
+  }
+  button:hover{ background:var(--ctrl); color:var(--void); }
+  button:focus-visible{ outline:2px solid var(--ink); outline-offset:2px; }
+  button[aria-pressed="true"]{ border-color:var(--ink); }
+  button[hidden]{ display:none; }
+  body.rest #ctrl{ opacity:0; pointer-events:none; }
+  /* ?embed=1 — 在展示頁的 iframe 裡預覽時只留錶面 */
+  body.embed #ctrl{ display:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="board">
+    <div class="card" id="ch">
+      <div class="pane top" id="hu"><span>00</span></div>
+      <div class="pane bot" id="hl"><span>00</span></div>
+      <div class="leaf top" id="hfu"><span>00</span></div>
+      <div class="leaf bot" id="hfl"><span>00</span></div>
+      <div class="seam"></div>
+    </div>
+    <div class="card" id="cm">
+      <div class="pane top" id="mu"><span>00</span></div>
+      <div class="pane bot" id="ml"><span>00</span></div>
+      <div class="leaf top" id="mfu"><span>00</span></div>
+      <div class="leaf bot" id="mfl"><span>00</span></div>
+      <div class="seam"></div>
+    </div>
+  </div>
+  <div id="ctrl">
+    <button id="bInstall" hidden>安裝</button>
+    <button id="bWake" aria-pressed="false">防休眠</button>
+    <button id="bFull">全螢幕</button>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+const $ = id => document.getElementById(id);
+const IDS = ['hu','hl','hfu','hfl','mu','ml','mfu','mfl'];
+const els = {}; const spans = {};
+IDS.forEach(id => { els[id] = $(id); spans[id] = els[id].querySelector('span'); });
+
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const DUR = RM ? 0 : 420;              // 一次翻頁的總時長（毫秒）
+const P1 = 0.43;                        // 落下／接住 的分界進度
+
+let shown = { h: '', m: '' };           // 已定案、已寫進 dataset 的值
+let runs = [];                          // 進行中的翻頁：{card, from, to, t0}
+let booted = false;
+
+function p2(n){ return String(n).padStart(2, '0'); }
+function timeParts(){
+  const d = new Date();
+  return { h: p2(d.getHours()), m: p2(d.getMinutes()) };
+}
+
+function setSpan(id, text){ spans[id].textContent = text; }
+function setLeaf(id, angle, sh){
+  els[id].style.transform = `rotateX(${angle}deg)`;
+  els[id].style.setProperty('--sh', sh);
+}
+function writeDataset(){
+  document.documentElement.dataset.shown = shown.h + shown.m;
+}
+
+// 無動畫直接吸附：四片都寫成同一個值、葉片歸位、陰影歸零
+function commitStatic(card, val){
+  setSpan(card+'u', val);
+  setSpan(card+'l', val);
+  setSpan(card+'fu', val);
+  setSpan(card+'fl', val);
+  setLeaf(card+'fu', 0, 0);
+  els[card+'fu'].hidden = false;
+  setLeaf(card+'fl', 90, 0);
+  els[card+'l'].style.setProperty('--sh', 0);
+  shown[card] = val;
+}
+
+function startRun(card, from, to, now){
+  setSpan(card+'u', to);      // 上半靜態立刻換新值（此刻被落下的葉片蓋住，看不出來）
+  setSpan(card+'l', from);    // 下半靜態暫時還是舊值
+  setSpan(card+'fu', from);   // 落下的葉片：舊值上半
+  setSpan(card+'fl', to);     // 接住的葉片：新值下半
+  els[card+'fu'].hidden = false;
+  runs.push({ card, from, to, t0: now });
+}
+
+function stepRun(r, p){
+  const c = r.card;
+  if(p < P1){
+    // 落下：重力加速
+    const q = p / P1;
+    const e = q*q;
+    setLeaf(c+'fu', -90*e, 0.55*e);
+    els[c+'l'].style.setProperty('--sh', 0.3*e);
+  }else{
+    // 接住：快進慢出 + 一次到底的回彈
+    els[c+'fu'].hidden = true;
+    const q = (p - P1) / (1 - P1);
+    const u = 1 - Math.pow(1-q, 2.4);
+    const bounce = Math.sin(Math.PI*q) * 4.5 * Math.pow(1-q, 2);
+    setLeaf(c+'fl', 90*(1-u) - bounce, 0.55*(1-u));
+    els[c+'l'].style.setProperty('--sh', 0.3*(1-u));
+  }
+}
+
+function finishRun(r){
+  const c = r.card;
+  setSpan(c+'l', r.to);
+  setSpan(c+'fu', r.to);
+  setLeaf(c+'fu', 0, 0);
+  els[c+'fu'].hidden = false;
+  setLeaf(c+'fl', 90, 0);
+  els[c+'l'].style.setProperty('--sh', 0);
+  shown[c] = r.to;
+  writeDataset();
+}
+
+function tick(now){
+  const t = timeParts();
+  for(const card of ['h','m']){
+    const want = card === 'h' ? t.h : t.m;
+    if(shown[card] === want) continue;
+    if(runs.some(r => r.card === card)) continue;   // 還在翻，下一幀再試
+    if(DUR === 0){ commitStatic(card, want); writeDataset(); }
+    else startRun(card, shown[card], want, now);
+  }
+
+  for(let i = runs.length-1; i>=0; i--){
+    const r = runs[i];
+    const p = Math.min((now - r.t0)/DUR, 1);
+    stepRun(r, p);
+    if(p >= 1){ finishRun(r); runs.splice(i,1); }
+  }
+}
+
+// ── 控制 ────────────────────────────────────────────────────────
+const bWake = $('bWake'), bFull = $('bFull'), bInstall = $('bInstall');
+
+bFull.onclick = () => {
+  if(document.fullscreenElement) document.exitFullscreen();
+  else document.getElementById('stage').requestFullscreen?.();
+};
+
+let wl = null, keepAwake = false;
+async function setWake(on){
+  keepAwake = on;
+  bWake.setAttribute('aria-pressed', String(on));
+  try{
+    if(on && 'wakeLock' in navigator){ wl = await navigator.wakeLock.request('screen'); }
+    else if(wl){ await wl.release(); wl = null; }
+  }catch(_){}
+}
+bWake.onclick = () => setWake(!keepAwake);
+document.addEventListener('visibilitychange', () => {
+  if(keepAwake && document.visibilityState === 'visible') setWake(true);
+});
+
+let deferred = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; bInstall.hidden = false; });
+bInstall.onclick = async () => {
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice;
+  deferred = null; bInstall.hidden = true;
+};
+addEventListener('appinstalled', () => { bInstall.hidden = true; });
+
+// 閒置四秒後把按鈕淡出，讓畫面乾淨
+let restTimer = null;
+function wake(){
+  document.body.classList.remove('rest');
+  clearTimeout(restTimer);
+  restTimer = setTimeout(() => document.body.classList.add('rest'), 4000);
+}
+['pointermove','pointerdown','keydown','touchstart'].forEach(ev => addEventListener(ev, wake, {passive:true}));
+wake();
+
+// 被展示頁 iframe 嵌入時不註冊 sw、不留控制列
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+// ── 啟動：起始畫面不播動畫，直接吸附並立刻寫入 ──────────────────
+const boot = timeParts();
+commitStatic('h', boot.h);
+commitStatic('m', boot.m);
+writeDataset();
+booted = true;
+
+(function frame(now){
+  tick(now);
+  requestAnimationFrame(frame);
+})(performance.now());
+})();
+</script>
+</body>
+</html>

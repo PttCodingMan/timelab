@@ -1,0 +1,14 @@
+{
+  "id": "flip",
+  "name": "翻頁時鐘",
+  "tagline": "時:分兩張黑牌白字，機場看板調性，整分鐘葉片落下翻新",
+  "created": "2026-07-28",
+  "tags": ["flip", "dom", "pwa"],
+  "accent": "#e9eaec",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-27T10:09:03+08:00",
+    "settle": 900
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "id": "flip-clock",
+  "name": "翻頁時鐘",
+  "short_name": "翻頁時鐘",
+  "description": "黑白翻頁時鐘，機場看板調性，整分鐘葉片落下翻新，24 小時制。",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": [
+    "fullscreen",
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "background_color": "#08090a",
+  "theme_color": "#08090a",
+  "categories": [
+    "utilities"
+  ],
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
