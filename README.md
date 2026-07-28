@@ -106,7 +106,12 @@ git 會被沒有意義的二進位差異洗版。`shoot.py` 在頁面腳本執�
 
 ## 部署
 
-推上 main 就會跑 `.github/workflows/deploy.yml`：build → 截圖 → build → 發到 Pages。
+推上 main 就會跑 `.github/workflows/deploy.yml`：
+約定檢查 → 模擬（**一座時鐘一個 job，平行跑**）→ build → 截圖 → build → 發到 Pages。
+
+模擬是整條 pipeline 唯一的瓶頸，單座約五分鐘而且是純 CPU，快取幫不上忙。
+拆成 matrix 之後牆上時間等於最慢的那一座，加再多時鐘都不會變慢。
+matrix 由 `ls */clock.json` 產生，新增時鐘一樣不用改 workflow。
 GitHub Pages 自動有 HTTPS，PWA 的安裝條件直接滿足。
 
 改版後記得把該座時鐘 `sw.js` 裡的 cache 版本號加一，否則舊的 sw 會一直回舊檔案。

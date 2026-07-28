@@ -15,7 +15,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 用 glob 生 matrix，維持「沒有中央註冊表」—— 新增時鐘不用改這裡
+  list:
+    runs-on: ubuntu-latest
+    outputs:
+      clocks: ${{ steps.ls.outputs.clocks }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 約定檢查只要 0 秒，擺在最前面，壞掉就不用白跑十分鐘模擬
+      - name: 檢查約定
+        run: python3 tools/check.py
+
+      - id: ls
+        run: |
+          echo "clocks=$(ls -d */clock.json | cut -d/ -f1 | jq -Rsc 'split("\n")[:-1]')" >> "$GITHUB_OUTPUT"
+
+  # 模擬是整條 pipeline 唯一的瓶頸（單座約五分鐘，純 CPU）。
+  # 一座一個 job，牆上時間 = 最慢的那一座，加再多時鐘也不會變慢。
+  sim:
+    needs: list
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        clock: ${{ fromJSON(needs.list.outputs.clocks) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 模擬時間推進
+        run: node tools/simulate.js ${{ matrix.clock }}/index.html
+
   build:
+    needs: sim
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,12 +64,6 @@ jobs:
         run: |
           pip install playwright pillow
           playwright install --with-deps chromium
-
-      - name: 檢查約定
-        run: python tools/check.py
-
-      - name: 模擬時間推進
-        run: node tools/simulate.js
 
       - name: 收集時鐘
         run: python tools/build.py
