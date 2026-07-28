@@ -1,0 +1,64 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 順便在 repo 還沒開 Pages 時自動開起來，省掉第一次跑失敗
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安裝相依
+        run: |
+          pip install playwright pillow
+          playwright install --with-deps chromium
+
+      - name: 檢查約定
+        run: python tools/check.py
+
+      - name: 模擬時間推進
+        run: node tools/simulate.js
+
+      - name: 收集時鐘
+        run: python tools/build.py
+
+      - name: 拍縮圖
+        run: python tools/shoot.py
+
+      - name: 重建清單（補上 thumb 欄位）
+        run: python tools/build.py
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

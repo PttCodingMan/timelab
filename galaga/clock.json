@@ -1,0 +1,14 @@
+{
+  "id": "galaga",
+  "name": "小蜜蜂時鐘",
+  "tagline": "每分鐘派一架戰機把舊的數字打掉，新的編隊俯衝進場",
+  "created": "2026-07-27",
+  "tags": ["arcade", "canvas", "pwa"],
+  "accent": "#f2c14e",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-27T10:09:02+08:00",
+    "settle": 3200
+  }
+}

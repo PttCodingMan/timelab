@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>敲磚時鐘</title>
+<meta name="description" content="數字是磚塊。分鐘一變，工地師傅跑過來從下面把它頂碎，新的磚塊再從天上掉下來。">
+<meta name="theme-color" content="#c2e4f7">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="敲磚時鐘">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --sky-hi:#6fa8dc;
+    --sky-lo:#e3f2fb;
+    --hill:#4f9e57;
+    --hill-2:#3d8046;
+    --dirt:#8a5a34;
+    --dirt-2:#6b4426;
+    --brick:#d9763a;
+    --brick-hi:#e8a86a;
+    --brick-lo:#8a4420;
+    --brick-sh:#6b3418;
+    --coin:#ffd24a;
+    --coin-2:#b8860b;
+    --ink:#241006;
+    --ink-2:#7a6555;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;overscroll-behavior:none;background:#c2e4f7}
+  body{
+    font-family:'Silkscreen',ui-monospace,'Courier New',monospace;
+    color:var(--ink);-webkit-font-smoothing:none;-webkit-tap-highlight-color:transparent;
+  }
+  #stage{position:fixed;inset:0}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+
+  .hud{
+    position:absolute;left:0;right:0;pointer-events:none;
+    font-size:clamp(9px,1.7vw,14px);letter-spacing:.04em;
+    padding:max(clamp(10px,2.5vw,22px),env(safe-area-inset-top)) clamp(10px,2.5vw,22px)
+            max(clamp(10px,2.5vw,22px),env(safe-area-inset-bottom));
+    text-shadow:0 2px 0 rgba(255,255,255,.55);
+  }
+  #hudTop{top:0;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .k{color:var(--ink-2);font-size:.75em;letter-spacing:.14em;display:block;margin-bottom:3px}
+  #hudBot{bottom:0;display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
+
+  #wave{flex:1;max-width:380px}
+  #waveLabel{color:var(--ink-2);font-size:clamp(8px,1.3vw,11px);margin-bottom:5px;letter-spacing:.1em}
+  #bar{height:10px;border:2px solid var(--ink);background:rgba(255,255,255,.45);position:relative}
+  #fill{position:absolute;inset:0 auto 0 0;width:0;background:var(--brick);transition:width .25s linear}
+
+  #ctrl{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;pointer-events:auto;transition:opacity .5s}
+  button{
+    font:inherit;font-size:clamp(8px,1.3vw,11px);color:var(--ink);
+    background:rgba(255,255,255,.7);border:2px solid var(--ink);
+    padding:8px 10px;cursor:pointer;border-radius:0;touch-action:manipulation;
+    box-shadow:2px 2px 0 var(--ink);
+  }
+  button:active{transform:translate(2px,2px);box-shadow:none}
+  button:hover{background:#fff}
+  button:focus-visible{outline:2px solid var(--brick);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--coin)}
+  button[hidden]{display:none}
+  #keys{position:absolute;left:clamp(10px,2.5vw,22px);bottom:max(clamp(10px,2.5vw,22px),env(safe-area-inset-bottom));
+        color:var(--ink-2);font-size:clamp(8px,1.3vw,11px);pointer-events:none;transition:opacity .5s}
+  body.rest #ctrl,body.rest #keys{opacity:0}
+  body.rest #ctrl{pointer-events:none}
+  body.embed #ctrl,body.embed #keys{display:none}
+  @media (max-width:640px){ #keys{display:none} #hudBot{flex-direction:column;align-items:stretch} #ctrl{justify-content:center} }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+
+  <div class="hud" id="hudTop">
+    <div><span class="k">金幣</span><span id="coins">×00</span></div>
+    <div style="text-align:right"><span class="k">今天</span><span id="date">—</span></div>
+  </div>
+
+  <div class="hud" id="hudBot">
+    <div id="wave">
+      <div id="waveLabel">下一次施工</div>
+      <div id="bar"><div id="fill"></div></div>
+    </div>
+    <div id="ctrl">
+      <button id="bInstall" hidden>安裝</button>
+      <button id="bTest">開工</button>
+      <button id="bFmt" aria-pressed="true">24 小時</button>
+      <button id="bSnd" aria-pressed="false">音效</button>
+      <button id="bWake" aria-pressed="false">防休眠</button>
+      <button id="bFull">全螢幕</button>
+    </div>
+  </div>
+  <div id="keys">空白鍵 開工 · T 時制 · S 音效 · W 防休眠 · F 全螢幕</div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// 每座時鐘各自持有一份，故意不共用 —— 資料夾之間零相依
+const FONT = {
+  '0':["01110","10001","10011","10101","11001","10001","01110"],
+  '1':["00100","01100","00100","00100","00100","00100","01110"],
+  '2':["01110","10001","00001","00010","00100","01000","11111"],
+  '3':["11111","00010","00100","00010","00001","10001","01110"],
+  '4':["00010","00110","01010","10010","11111","00010","00010"],
+  '5':["11111","10000","11110","00001","00001","10001","01110"],
+  '6':["00110","01000","10000","11110","10001","10001","01110"],
+  '7':["11111","00001","00010","00100","01000","01000","01000"],
+  '8':["01110","10001","10001","01110","10001","10001","01110"],
+  '9':["01110","10001","10001","01111","00001","00010","01100"]
+};
+
+const OUT = '#241006';                       // 統一的輪廓色
+
+// 磚塊：外圈輪廓 + 內部灰漿線，亮度拉高才壓得過天空
+const BRICK = [
+  "XXXXXXXX",
+  "XHHHHHHX",
+  "XOOOXOOX",
+  "XOOOXOOX",
+  "XXXXXXXX",
+  "XOXOOOOX",
+  "XSXSSSSX",
+  "XXXXXXXX"
+];
+const C_BRICK = {X:OUT, H:'#f6b070', O:'#d9763a', S:'#a8511f'};
+
+// 金磚：每個數字隨機一塊，敲掉噴五枚金幣
+const GOLD = [
+  "XXXXXXXX",
+  "XGGGGGGX",
+  "XGGGKGGX",
+  "XGGKKKGX",
+  "XGKKKKKX",
+  "XGGKKKGX",
+  "XGGGKGGX",
+  "XXXXXXXX"
+];
+const C_GOLD = {X:OUT, G:'#f2c53d', K:'#8a5a10'};
+
+// 地面磚
+const GROUND = [
+  "XXXXXXXX",
+  "XTTTTTTX",
+  "XDDDDDDX",
+  "XDDPDDDX",
+  "XDDDDDDX",
+  "XDPDDDPX",
+  "XDDDDDDX",
+  "XXXXXXXX"
+];
+const C_GROUND = {X:OUT, T:'#9a8f7a', D:'#6a6558', P:'#454236'};
+
+// 原創角色。16x16，帶輪廓，上半身固定、下半身三種姿勢
+const BODY = [
+  ".....XXXXXX.....",
+  "....XCCCCCCX....",
+  "...XCCCCCCCCX...",
+  "..XCCCCCCCCCCX..",
+  ".XCCCCCCCCCCCCX.",
+  ".XSSSSSSSSSSSSX.",
+  ".XSSEESSSSEESSX.",
+  ".XSSSSSSSSSSSSX.",
+  "..XSSSSSSSSSSX..",
+  "..XBBBBBBBBBBX..",
+  ".XBBOOOOOOOOBBX.",
+  "XSXBOOOOOOOOBXSX",
+  "XSXBOOOOOOOOBXSX"
+];
+const LEGS = {
+  stand: ["..XOOOOOOOOOOX..", "..XOOXX..XXOOX..", ".XFFFX...XFFFX.."],
+  run:   ["..XOOOOOOOOOOX..", ".XOOXX....XXOOX.", "XFFFX......XFFFX"],
+  jump:  ["..XOOOOOOOOOOX..", "..XOOOOOOOOOOX..", ".XFFFXXXXXXFFFX."],
+  skid:  ["..XOOOOOOOOOOX..", "XOOXX.....XXOOX.", "XFFFFX.....XFFX."]
+};
+// 師傅（橘帽）與他的好兄弟（綠帽）
+const CREW = [
+  {X:OUT, C:'#e8873a', S:'#f7d3ab', E:'#241006', B:'#2fa8a0', O:'#4a6fa8', F:'#3a2a1a'},
+  {X:OUT, C:'#4caf50', S:'#f7d3ab', E:'#241006', B:'#f0c341', O:'#2f4a7a', F:'#3a2a1a'}
+];
+
+const COIN = [
+  "..XXXX..",
+  ".XGGGGX.",
+  "XGLLLLGX",
+  "XGLWWLGX",
+  "XGLLLLGX",
+  "XGLLLLGX",
+  ".XGGGGX.",
+  "..XXXX.."
+];
+const C_COIN = {X:OUT, G:'#c8941a', L:'#ffd85a', W:'#fff5c0'};
+
+// ── 背景開關 ────────────────────────────────────────────────────
+// 想關掉哪個就改成 false，改完重新整理即可
+const SHOW = {
+  clouds: false,   // 天上的雲。畫成帶輪廓的方塊之後跟磚塊太像，預設關掉
+  hills:  true,    // 地平線上的遠山
+  bushes: true     // 地平線上的灌木叢
+};
+
+// ── 版面 ────────────────────────────────────────────────────────
+const STACK_RATIO = 1.25;
+let W=0,H=0,dpr=1,cell=10,originX=0,originY=0,stack=false,booted=false;
+let GRID_COLS=24, GRID_ROWS=7, POS=[], ROWS=[];
+
+function layout(){
+  W = cv.clientWidth; H = cv.clientHeight;
+  dpr = Math.min(window.devicePixelRatio||1, 2);
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.imageSmoothingEnabled = false;
+
+  stack = (W/H) < STACK_RATIO;
+  if(stack){
+    GRID_COLS = 11; GRID_ROWS = 15;
+    POS = [{c:0,r:0},{c:6,r:0},{c:0,r:8},{c:6,r:8}];
+    ROWS = [0,8];
+    cell = Math.min(W/(GRID_COLS+3), H/(GRID_ROWS+10));
+  }else{
+    GRID_COLS = 24; GRID_ROWS = 7;
+    POS = [{c:0,r:0},{c:6,r:0},{c:13,r:0},{c:19,r:0}];
+    ROWS = [0];
+    cell = Math.min(W/(GRID_COLS+5), H/(GRID_ROWS+14));
+  }
+  originX = (W - GRID_COLS*cell)/2;
+  originY = (H - GRID_ROWS*cell)/2 - cell*1.4;
+
+  makeClouds();
+  bricks.forEach(b => {
+    const t = targetOf(b.d,b.r,b.c);
+    b.tx=t.x; b.ty=t.y;
+    if(b.state==='idle'){ b.x=b.tx; b.y=b.ty; }
+  });
+  runs.forEach(R => {
+    R.gy = ledgeY(POS[R.d].r);
+    if(R.onGround) R.y = R.gy;
+  });
+  booted = true;
+}
+
+// 每一排數字腳下都有一條地面，師傅就站在上面
+const GAP = 3.2;
+const ledgeY = row => originY + (row+7)*cell + cell*GAP;
+
+let clouds=[];
+function makeClouds(){
+  clouds=[];
+  if(!SHOW.clouds) return;
+  const n = Math.max(3, Math.round(W/420));
+  for(let i=0;i<n;i++)
+    clouds.push({x:Math.random()*W, y:H*0.06+Math.random()*H*0.22,
+                 s:(RM?2:9)+Math.random()*8, k:0.7+Math.random()*0.8});
+}
+
+// ── 實體 ────────────────────────────────────────────────────────
+let bricks=[], shards=[], coins=[], pops=[], dust=[], runs=[];
+
+// 起跳、落地、甩尾都噴一下，動作的起訖點才有重量
+function puff(x, y, n, dir){
+  for(let i=0;i<n;i++)
+    dust.push({x:x + (Math.random()-0.5)*cell*0.5, y:y - cell*0.1,
+               vx:(dir||(Math.random()-0.5)*2)*cell*(2+Math.random()*4),
+               vy:-Math.random()*cell*4, life:0.34+Math.random()*0.2, max:0.5,
+               s:cell*(0.16+Math.random()*0.16)});
+}
+let shake=0;
+let time=0, h24=true, sound=false, coinCount=0;
+// want = 想顯示的；drawn = 畫面上真的已經放好的。兩者分開是這支程式的關鍵：
+// 只有真的放好才寫進 drawn，所以任何一步卡住，下一幀都會自己重試。
+let want=['','','',''], drawn=['','','',''];
+
+function commit(d, ch){
+  drawn[d] = ch;
+  document.documentElement.dataset.shown = drawn.join('');
+}
+
+const easeOut = t => 1-Math.pow(1-t,3);
+
+function targetOf(d,r,c){
+  const p = POS[d];
+  return { x: originX + (p.c+c+0.5)*cell, y: originY + (p.r+r+0.5)*cell };
+}
+
+function buildDigit(d, ch, delayBase){
+  const g = FONT[ch]; if(!g) return;
+  commit(d, ch);
+  let i=0;
+  for(let r=6;r>=0;r--) for(let c=0;c<5;c++){
+    if(g[r][c]!=='1') continue;
+    const t = targetOf(d,r,c);
+    bricks.push({d, r, c, tx:t.x, ty:t.y, x:t.x, y:-cell*(3+Math.random()*4),
+                 vy:0, squash:0, bounce:0, gold:false,
+                 state:'fall', delay: delayBase + i*0.045, t:0, alive:true});
+    i++;
+  }
+  // 每個數字挑一塊當金磚
+  const mine = bricks.filter(b => b.alive && b.d===d);
+  if(mine.length) mine[Math.floor(Math.random()*mine.length)].gold = true;
+}
+
+// 某個數字第 c 行最下面那塊磚（師傅要頂的就是它）
+function lowestIn(d, c){
+  let best=null;
+  for(const b of bricks)
+    if(b.alive && b.d===d && b.c===c && (!best || b.r>best.r)) best=b;
+  return best;
+}
+
+function timeStr(){
+  const d=new Date(); let h=d.getHours();
+  if(!h24){ h=h%12; if(h===0) h=12; }
+  return String(h).padStart(2,'0')+String(d.getMinutes()).padStart(2,'0');
+}
+
+function startChange(next, forceAll){
+  let k = 0;
+  for(let d=0; d<4; d++){
+    if(!forceAll && want[d] === next[d]) continue;
+    if(runs.some(r => r.d === d)) continue;   // 還在施工，下一幀再試
+    want[d] = next[d];
+    const cols = [];
+    for(let c=0;c<5;c++) if(lowestIn(d,c)) cols.push(c);
+    if(!cols.length){ buildDigit(d, next[d], 0.05); continue; }
+    const gy = ledgeY(POS[d].r);
+    runs.push({
+      d, ch:next[d], cols, ci:0, phase:'wait', t:0, age:0, delay:k*0.30,
+      crew:k%CREW.length, gy, built:false,
+      x: originX + (POS[d].c-4)*cell, y: gy,
+      vx:0, vy:0, face:1, skid:false, squash:0, onGround:true, step:0
+    });
+    k++;
+  }
+}
+
+const CHAR_H = () => cell*2.2;
+
+// 平台遊戲的手感幾乎全在這幾個數字裡。
+// 關鍵是「上升重力小於下降重力」—— 跳躍弧線不對稱，滯空感就出來了，
+// 這是所有經典平台遊戲共用的作法，而且是純物理，不是誰的美術。
+const G_UP    = () => cell*130;   // 上升時
+const G_DOWN  = () => cell*260;   // 下降時，兩倍，落下比較俐落
+const G       = () => cell*200;   // 磚塊等雜物用
+const RUN_ACC = () => cell*90;    // 加速度：不會瞬間到全速
+const RUN_MAX = () => cell*17;
+const SKID_ACC= () => cell*170;   // 反向時的煞車，比加速更快 → 有甩尾感
+
+function updateRuns(dt){
+  for(let i=runs.length-1;i>=0;i--){
+    const R=runs[i]; R.t+=dt; R.age+=dt;
+
+    // 看門狗：任何情況下都不讓一個 run 永久佔住某個數字
+    if(R.age > 15){
+      if(!R.built){ bricks.forEach(b => { if(b.d===R.d) b.alive=false; }); buildDigit(R.d, R.ch, 0); }
+      runs.splice(i,1); continue;
+    }
+
+    if(R.phase==='wait'){ if(R.t>=R.delay){ R.phase='run'; R.t=0; } continue; }
+
+    // 走路動畫
+    if(R.onGround) R.step += dt * (6 + Math.abs(R.vx)/cell*1.1);
+    if(R.squash > 0) R.squash = Math.max(0, R.squash - dt*6);
+
+    if(R.phase==='run' || R.phase==='leave'){
+      const targetX = R.phase==='leave'
+        ? W + cell*6
+        : originX + (POS[R.d].c + R.cols[R.ci] + 0.5)*cell;
+      const dx  = targetX - R.x;
+      const dir = Math.sign(dx);
+
+      // 反向時用更大的減速度，會先滑一段才轉向 —— 這就是甩尾感
+      const skidding = R.vx !== 0 && Math.sign(R.vx) !== dir && Math.abs(R.vx) > cell*4;
+      R.skid = skidding;
+      if(skidding){
+        R.vx -= Math.sign(R.vx) * SKID_ACC() * dt;
+        if(Math.random() < dt*30) puff(R.x - Math.sign(R.vx)*cell*0.4, R.gy, 1, -Math.sign(R.vx));
+      }else{
+        // 剩餘距離不足以煞停就開始減速，才不會衝過頭來回震盪
+        const brake = (R.vx*R.vx) / (2*RUN_ACC());
+        if(Math.abs(dx) > brake) R.vx += dir * RUN_ACC() * dt;
+        else                     R.vx -= Math.sign(R.vx) * RUN_ACC() * dt;
+      }
+      R.vx = Math.max(-RUN_MAX(), Math.min(RUN_MAX(), R.vx));
+      R.x += R.vx * dt;
+      if(R.vx) R.face = Math.sign(R.vx);
+      if(Math.abs(R.vx) > cell*6 && Math.random() < dt*12) puff(R.x, R.gy, 1, -Math.sign(R.vx));
+
+      if(R.phase==='leave'){
+        if(R.x > W + cell*4){ runs.splice(i,1); }
+        continue;
+      }
+      if(Math.abs(dx) < cell*0.3 && Math.abs(R.vx) < cell*4){
+        R.x = targetX; R.vx = 0; R.skid = false;
+        const brick = lowestIn(R.d, R.cols[R.ci]);
+        if(!brick){ nextCol(R,i); continue; }
+        // 剛好頂到磚塊底邊所需的初速
+        const rise = (R.gy - CHAR_H()) - (brick.ty + cell*0.5) + cell*0.25;
+        R.vy = -Math.sqrt(2*G_UP()*Math.max(rise, cell*0.5));
+        puff(R.x, R.gy, 5, 0);
+        R.onGround = false;
+        R.phase = 'jump';
+        R.hit = false;
+        blip('jump');
+      }
+      continue;
+    }
+
+    if(R.phase==='jump'){
+      R.vy += (R.vy < 0 ? G_UP() : G_DOWN())*dt;
+      R.y  += R.vy*dt;
+      R.x  += R.vx*dt*0.35;          // 保留一點水平慣性，不是原地垂直彈跳
+      R.vx *= 0.985;
+
+      const brick = lowestIn(R.d, R.cols[R.ci]);
+      if(!R.hit && brick && (R.y - CHAR_H()) <= brick.ty + cell*0.5){
+        R.hit = true;
+        R.vy = Math.abs(R.vy)*0.35;                 // 撞到就往下彈
+        smash(R.d, R.cols[R.ci]);
+      }
+      if(R.y >= R.gy){
+        R.y = R.gy; R.vy = 0; R.onGround = true;
+        R.squash = 1;                 // 落地壓扁
+        puff(R.x, R.gy, 7, 0);
+        blip('land');
+        nextCol(R, i);
+      }
+    }
+  }
+}
+
+function nextCol(R, i){
+  R.ci++;
+  if(R.ci >= R.cols.length){
+    buildDigit(R.d, R.ch, 0.12);
+    R.built = true;
+    R.phase = 'leave';
+  }else{
+    R.phase = 'run';
+  }
+}
+
+// 由下往上依序碎掉
+function smash(d, c){
+  const col = bricks.filter(b => b.alive && b.d===d && b.c===c).sort((a,b)=>b.r-a.r);
+  col.forEach(b => { b.bounce = 1; });          // 整行先往上頂一下
+  col.forEach((b, k) => setTimeout(() => breakBrick(b, k===0), 90 + k*45));
+  shake = Math.min(1, shake + 0.7);
+}
+
+function breakBrick(b, dropCoin){
+  if(!b.alive) return;
+  b.alive = false;
+  const s = cell*0.42;
+  for(let i=0;i<4;i++){
+    shards.push({
+      x: b.x + (i%2?1:-1)*s*0.5, y: b.y + (i<2?-1:1)*s*0.5,
+      vx: (i%2?1:-1)*(0.6+Math.random())*cell*7,
+      vy: -(1.1+Math.random()*0.7)*cell*11,
+      rot: Math.random()*6.28, vr: (Math.random()-0.5)*14, s, life:1.1
+    });
+  }
+  const n = b.gold ? 5 : (dropCoin ? 1 : 0);
+  for(let i=0;i<n;i++){
+    coins.push({x:b.x + (i-(n-1)/2)*cell*0.35, y:b.y,
+                vx:(i-(n-1)/2)*cell*2.2, vy:-cell*(19+Math.random()*5), life:0.85});
+    coinCount++;
+  }
+  if(n) pops.push({x:b.x, y:b.y - cell*0.6, life:0.8, n});
+  if(b.gold) shake = Math.min(1.4, shake + 0.5);
+  blip(b.gold ? 'gold' : 'break');
+}
+
+// ── 更新 ────────────────────────────────────────────────────────
+function update(dt){
+  startChange(timeStr(), false);   // 每幀比對，卡住的數字會自己追上
+  updateRuns(dt);
+
+  for(const c of clouds){ c.x += c.s*dt; if(c.x > W+cell*6) c.x = -cell*6; }
+
+  for(const b of bricks){
+    if(!b.alive) continue;
+    if(b.state==='fall'){
+      b.t += dt;
+      if(b.t < b.delay) continue;
+      b.vy += G()*0.55*dt;
+      b.y  += b.vy*dt;
+      if(b.y >= b.ty){ b.y = b.ty; b.vy = 0; b.state='idle'; b.squash = 1; blip('land'); }
+    }else if(b.squash > 0){
+      b.squash = Math.max(0, b.squash - dt*5);
+    }
+    if(b.bounce > 0) b.bounce = Math.max(0, b.bounce - dt*7);
+  }
+  bricks = bricks.filter(b => b.alive);
+
+  for(let i=shards.length-1;i>=0;i--){
+    const s=shards[i];
+    s.vy += G()*0.5*dt; s.x += s.vx*dt; s.y += s.vy*dt;
+    s.rot += s.vr*dt; s.life -= dt;
+    if(s.life<=0 || s.y > H+cell*3) shards.splice(i,1);
+  }
+  for(let i=coins.length-1;i>=0;i--){
+    const c=coins[i];
+    c.vy += G()*0.5*dt; c.y += c.vy*dt; c.x += (c.vx||0)*dt; c.life -= dt;
+    if(c.life<=0) coins.splice(i,1);
+  }
+  for(let i=pops.length-1;i>=0;i--){
+    const q=pops[i]; q.y -= cell*2.2*dt; q.life -= dt;
+    if(q.life<=0) pops.splice(i,1);
+  }
+  for(let i=dust.length-1;i>=0;i--){
+    const q=dust[i];
+    q.x += q.vx*dt; q.y += q.vy*dt; q.vy += G()*0.12*dt;
+    q.vx *= 0.9; q.life -= dt;
+    if(q.life<=0) dust.splice(i,1);
+  }
+  shake = Math.max(0, shake - dt*4.5);
+}
+
+// ── 繪製 ────────────────────────────────────────────────────────
+function sprite(map, cx, cy, px, colors, alpha, rot, sx, sy){
+  ctx.save();
+  ctx.globalAlpha = alpha ?? 1;
+  ctx.translate(cx, cy);
+  if(rot) ctx.rotate(rot);
+  if(sx || sy) ctx.scale(sx ?? 1, sy ?? 1);
+  const w = map[0].length, h = map.length;
+  const ox = -px*w/2, oy = -px*h/2;
+  for(let r=0;r<h;r++){
+    const row = map[r];
+    for(let c=0;c<w;c++){
+      const ch = row[c];
+      if(ch==='.') continue;
+      ctx.fillStyle = colors[ch];
+      ctx.fillRect(Math.round(ox+c*px), Math.round(oy+r*px), Math.ceil(px), Math.ceil(px));
+    }
+  }
+  ctx.restore();
+}
+
+function drawBackground(){
+  const g = ctx.createLinearGradient(0,0,0,H);
+  // 數字大約落在畫面 26%~61% 的高度，那一段刻意拉到最亮，
+  // 讓深色輪廓跟天空的對比最大化 —— 讀出形狀靠的是輪廓不是磚面
+  g.addColorStop(0,    '#6fa8dc');
+  g.addColorStop(0.26, '#c2e4f7');
+  g.addColorStop(0.62, '#e3f2fb');
+  g.addColorStop(1,    '#bcdcf0');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  const horizon = ledgeY(ROWS[ROWS.length-1]);
+
+  // 遠山：兩層，帶輪廓
+  if(SHOW.hills){
+  const hill = (yBase, h, step, fill, edge) => {
+    for(let i=-1; i*step < W+step; i++){
+      const cx = i*step + step*0.45;
+      ctx.beginPath();
+      ctx.moveTo(cx-h, yBase);
+      ctx.quadraticCurveTo(cx, yBase-h*1.15, cx+h, yBase);
+      ctx.closePath();
+      ctx.fillStyle = fill; ctx.fill();
+      ctx.lineWidth = Math.max(2, cell*0.09); ctx.strokeStyle = edge; ctx.stroke();
+    }
+  };
+  hill(horizon, cell*5.0, cell*13, '#3f8f52', '#241006');
+  hill(horizon, cell*3.2, cell*8.5, '#57ab63', '#241006');
+  }
+
+  // 灌木叢，貼在地平線上
+  if(SHOW.bushes){
+  ctx.fillStyle = '#2f7a42';
+  ctx.strokeStyle = '#241006'; ctx.lineWidth = Math.max(2, cell*0.09);
+  for(let i=0; i*cell*9 < W+cell*9; i++){
+    const cx = i*cell*9 + cell*3.5, r = cell*1.05;
+    ctx.beginPath();
+    ctx.arc(cx-r*0.9, horizon, r*0.8, Math.PI, 0);
+    ctx.arc(cx,       horizon, r,     Math.PI, 0);
+    ctx.arc(cx+r*0.9, horizon, r*0.8, Math.PI, 0);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  }
+
+  // 雲：預設關閉，見上方 SHOW
+  for(const c of clouds){
+    const u = cell*c.k;
+    const parts = [[-1.4,-0.4,1.6,1.0],[0,-0.9,2.4,1.5],[1.5,-0.5,1.7,1.1],[-0.6,0.2,3.0,0.9]];
+    ctx.fillStyle = '#f2f7fb'; ctx.strokeStyle = '#241006';
+    ctx.lineWidth = Math.max(2, cell*0.085);
+    parts.forEach(([dx,dy,rw,rh]) => {
+      const x = Math.round(c.x+dx*u), y = Math.round(c.y+dy*u);
+      const w = Math.round(rw*u), h = Math.round(rh*u);
+      ctx.fillRect(x,y,w,h); ctx.strokeRect(x,y,w,h);
+    });
+  }
+}
+
+function drawLedges(){
+  const gp = cell*0.94/8;
+  for(const row of ROWS){
+    const y = ledgeY(row);
+    const isFloor = row === ROWS[ROWS.length-1];
+    if(isFloor){
+      // 真正的地面才鋪整排地磚
+      for(let x = -cell; x < W + cell; x += cell)
+        sprite(GROUND, x + cell*0.5, y + cell*0.5, gp, C_GROUND, 1);
+    }else{
+      // 直式版面上層那條是浮空平台，畫成薄板，避免被看成一排方塊
+      ctx.fillStyle = '#6a6558';
+      ctx.fillRect(0, y + cell*0.28, W, cell*0.44);
+      ctx.fillStyle = '#9a8f7a';
+      ctx.fillRect(0, y + cell*0.28, W, cell*0.14);
+      ctx.fillStyle = OUT;
+      ctx.fillRect(0, y + cell*0.24, W, Math.max(2, cell*0.07));
+      ctx.fillRect(0, y + cell*0.72, W, Math.max(2, cell*0.07));
+    }
+    if(isFloor){
+      ctx.fillStyle = '#4f4c42';
+      ctx.fillRect(0, y + cell, W, H - (y + cell));
+      ctx.fillStyle = '#413f36';
+      for(let x = 0; x < W; x += cell*2)
+        ctx.fillRect(x, y + cell, cell, H - (y + cell));
+    }
+  }
+}
+
+function draw(){
+  ctx.save();
+  if(shake > 0.01){
+    const a = shake * cell * 0.22;
+    ctx.translate((Math.random()-0.5)*a, (Math.random()-0.5)*a);
+  }
+
+  drawBackground();
+  drawLedges();
+
+  const bp = cell*0.94/8;
+  for(const b of bricks){
+    if(b.state==='fall' && b.t < b.delay) continue;
+    const q = b.squash;
+    sprite(b.gold ? GOLD : BRICK, b.x, b.y + q*cell*0.12 - b.bounce*cell*0.32, bp,
+           b.gold ? C_GOLD : C_BRICK, 1, 0, 1+q*0.22, 1-q*0.22);
+  }
+
+  for(const s of shards){
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, s.life);
+    ctx.translate(s.x, s.y); ctx.rotate(s.rot);
+    ctx.fillStyle = C_BRICK.O; ctx.fillRect(-s.s/2, -s.s/2, s.s, s.s);
+    ctx.fillStyle = C_BRICK.H; ctx.fillRect(-s.s/2, -s.s/2, s.s, Math.max(1,s.s*0.3));
+    ctx.strokeStyle = OUT; ctx.lineWidth = Math.max(1, s.s*0.14);
+    ctx.strokeRect(-s.s/2, -s.s/2, s.s, s.s);
+    ctx.restore();
+  }
+
+  const cp = cell*0.62/8;
+  for(const c of coins)
+    sprite(COIN, c.x, c.y, cp, C_COIN, Math.min(1, c.life*2), 0,
+           Math.cos(time*13)*0.9 + 0.1, 1);
+
+  // 敲出金幣時的 +N
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `${Math.round(cell*0.62)}px Silkscreen, monospace`;
+  for(const q of pops){
+    ctx.globalAlpha = Math.min(1, q.life*1.6);
+    ctx.lineWidth = Math.max(3, cell*0.14); ctx.strokeStyle = OUT;
+    ctx.strokeText('+'+q.n, q.x, q.y);
+    ctx.fillStyle = '#ffd85a'; ctx.fillText('+'+q.n, q.x, q.y);
+  }
+  ctx.globalAlpha = 1;
+
+  // 塵土畫在角色後面
+  for(const q of dust){
+    ctx.globalAlpha = Math.min(0.75, q.life/q.max);
+    ctx.fillStyle = '#d8d2c4';
+    ctx.fillRect(q.x-q.s/2, q.y-q.s/2, q.s, q.s);
+  }
+  ctx.globalAlpha = 1;
+
+  const px = CHAR_H()/16;
+  for(const R of runs){
+    if(R.phase==='wait') continue;
+    const legs = !R.onGround ? LEGS.jump
+               : R.skid ? LEGS.skid
+               : (R.phase==='run' || R.phase==='leave')
+                 ? (Math.floor(R.step)%2 ? LEGS.run : LEGS.stand)
+                 : LEGS.stand;
+    const q  = R.squash || 0;
+    const sy = 1 - q*0.26, sx = (1 + q*0.26) * (R.face < 0 ? -1 : 1);
+    const h  = CHAR_H()*sy;
+    sprite(BODY.concat(legs), R.x, R.y - h/2, px, CREW[R.crew], 1, 0, sx, sy);
+  }
+
+  ctx.restore();
+}
+
+// ── 音效 ────────────────────────────────────────────────────────
+let actx=null;
+function tone(freq, dur, type, vol, slideTo){
+  if(!sound) return;
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    const o=actx.createOscillator(), g=actx.createGain(), t=actx.currentTime;
+    o.type=type;
+    o.frequency.setValueAtTime(freq,t);
+    if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t+dur);
+    g.gain.setValueAtTime(vol,t);
+    g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    o.connect(g).connect(actx.destination); o.start(t); o.stop(t+dur+0.01);
+  }catch(_){}
+}
+function blip(kind){
+  if(kind==='jump')  tone(340, 0.11, 'square', 0.035, 720);
+  if(kind==='break') tone(180, 0.09, 'square', 0.04, 70);
+  if(kind==='land')  tone(150, 0.05, 'triangle', 0.03);
+  if(kind==='gold'){ tone(880, 0.07, 'square', 0.04); setTimeout(()=>tone(1320, 0.16, 'square', 0.035), 70); }
+}
+
+// ── HUD ─────────────────────────────────────────────────────────
+const elCoins=document.getElementById('coins');
+const elDate=document.getElementById('date');
+const elFill=document.getElementById('fill');
+function hud(){
+  const d=new Date();
+  elCoins.textContent = '×' + String(coinCount).padStart(2,'0');
+  elDate.textContent = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
+  elFill.style.width = ((d.getSeconds()+d.getMilliseconds()/1000)/60*100).toFixed(1)+'%';
+}
+
+// ── 控制 ────────────────────────────────────────────────────────
+const bFmt=document.getElementById('bFmt'), bSnd=document.getElementById('bSnd'),
+      bWake=document.getElementById('bWake'), bFull=document.getElementById('bFull'),
+      bInstall=document.getElementById('bInstall');
+
+document.getElementById('bTest').onclick = () => startChange(timeStr(), true);
+bFmt.onclick = () => { h24=!h24; bFmt.textContent=h24?'24 小時':'12 小時';
+  bFmt.setAttribute('aria-pressed', String(h24)); startChange(timeStr(), true); };
+bSnd.onclick = () => { sound=!sound; bSnd.setAttribute('aria-pressed', String(sound)); if(sound) blip('jump'); };
+bFull.onclick = () => {
+  const s=document.getElementById('stage');
+  if(document.fullscreenElement) document.exitFullscreen(); else s.requestFullscreen?.();
+};
+
+let wl=null, keepAwake=false;
+async function setWake(on){
+  keepAwake=on; bWake.setAttribute('aria-pressed', String(on));
+  try{
+    if(on && 'wakeLock' in navigator) wl = await navigator.wakeLock.request('screen');
+    else if(wl){ await wl.release(); wl=null; }
+  }catch(_){}
+}
+bWake.onclick = () => setWake(!keepAwake);
+document.addEventListener('visibilitychange', () => {
+  if(keepAwake && document.visibilityState==='visible') setWake(true);
+});
+
+addEventListener('keydown', e=>{
+  if(e.target.tagName==='BUTTON') return;
+  const k=e.key.toLowerCase();
+  if(k===' '){ e.preventDefault(); startChange(timeStr(), true); }
+  if(k==='t') bFmt.click();
+  if(k==='s') bSnd.click();
+  if(k==='w') bWake.click();
+  if(k==='f') bFull.click();
+});
+addEventListener('resize', layout);
+addEventListener('orientationchange', () => setTimeout(layout,120));
+
+let restTimer=null;
+function wake(){
+  document.body.classList.remove('rest');
+  clearTimeout(restTimer);
+  restTimer=setTimeout(()=>document.body.classList.add('rest'), 4000);
+}
+['pointermove','pointerdown','keydown','touchstart'].forEach(ev=>addEventListener(ev,wake,{passive:true}));
+wake();
+
+// ── PWA ─────────────────────────────────────────────────────────
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+let deferred=null;
+addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); deferred=e; bInstall.hidden=false; });
+bInstall.onclick = async () => {
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice; deferred=null; bInstall.hidden=true;
+};
+addEventListener('appinstalled', ()=>{ bInstall.hidden=true; });
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+// ── 啟動 ────────────────────────────────────────────────────────
+layout();
+want = timeStr().split('');
+for(let d=0; d<4; d++) buildDigit(d, want[d], 0.15 + d*0.12);
+hud(); setInterval(hud, 100);
+
+let last=performance.now();
+(function frame(now){
+  const dt=Math.min((now-last)/1000, 0.05); last=now; time+=dt;
+  update(dt); draw();
+  requestAnimationFrame(frame);
+})(last);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "id": "bricks-clock",
+  "name": "敲磚時鐘",
+  "short_name": "敲磚時鐘",
+  "description": "數字是磚塊。分鐘一變，工地師傅跑過來從下面把它頂碎，新的磚塊再從天上掉下來。",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#c2e4f7",
+  "theme_color": "#c2e4f7",
+  "categories": ["utilities", "entertainment"],
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

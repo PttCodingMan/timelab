@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>小蜜蜂時鐘</title>
+<meta name="description" content="Galaga 風格的時鐘，每分鐘派戰機把舊數字打掉。">
+<meta name="theme-color" content="#05060a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="小蜜蜂時鐘">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --void:#05060a;
+    --star:#e8ecf5;
+    --bee:#f2c14e;
+    --bee-eye:#12141c;
+    --wing:#e0483f;
+    --ship:#8ce9f4;
+    --ship-red:#e0483f;
+    --bullet:#fff6c2;
+    --spark:#ff8a3d;
+    --hud:#e0483f;
+    --hud-dim:#5a6072;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--void);overflow:hidden;overscroll-behavior:none}
+  body{
+    font-family:'Press Start 2P',ui-monospace,'Courier New',monospace;
+    color:var(--star);
+    -webkit-font-smoothing:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #stage{position:fixed;inset:0;background:var(--void)}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+
+  #crt{
+    position:absolute;inset:0;pointer-events:none;
+    background:
+      repeating-linear-gradient(0deg,rgba(0,0,0,.28) 0 1px,transparent 1px 3px),
+      radial-gradient(ellipse at 50% 50%,transparent 55%,rgba(0,0,0,.55) 100%);
+    mix-blend-mode:multiply;
+  }
+
+  .hud{
+    position:absolute;left:0;right:0;pointer-events:none;
+    font-size:clamp(7px,1.5vw,11px);line-height:1.9;letter-spacing:.06em;
+    padding:max(clamp(10px,2.5vw,22px),env(safe-area-inset-top)) clamp(10px,2.5vw,22px)
+            max(clamp(10px,2.5vw,22px),env(safe-area-inset-bottom));
+  }
+  #hudTop{top:0;display:flex;justify-content:space-between;gap:8px}
+  .lbl{color:var(--hud)}
+  .val{color:var(--star)}
+  #p1 .lbl{animation:blink 1.06s steps(1,end) infinite}
+  @keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:.15}}
+  .col{text-align:center}
+  #hudRight{text-align:right}
+
+  #hudBot{bottom:0;display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
+  #wave{flex:1;max-width:420px}
+  #waveLabel{color:var(--hud-dim);font-size:clamp(6px,1.2vw,9px);margin-bottom:6px}
+  #bar{height:6px;border:1px solid var(--hud-dim);position:relative}
+  #fill{position:absolute;inset:1px auto 1px 1px;width:0;background:var(--hud);transition:width .25s linear}
+
+  #ctrl{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;pointer-events:auto;
+        transition:opacity .5s ease}
+  button{
+    font:inherit;font-size:clamp(6px,1.2vw,9px);letter-spacing:.06em;
+    color:var(--star);background:transparent;border:2px solid var(--hud-dim);
+    padding:9px 10px;cursor:pointer;border-radius:0;touch-action:manipulation;
+  }
+  button:hover{background:var(--hud-dim);color:var(--void)}
+  button:focus-visible{outline:2px solid var(--bee);outline-offset:2px}
+  button[aria-pressed="true"]{border-color:var(--bee);color:var(--bee)}
+  button[hidden]{display:none}
+  #bInstall{border-color:var(--bee);color:var(--bee)}
+  #keys{position:absolute;left:clamp(10px,2.5vw,22px);bottom:max(clamp(10px,2.5vw,22px),env(safe-area-inset-bottom));
+        color:var(--hud-dim);font-size:clamp(6px,1.2vw,9px);pointer-events:none;transition:opacity .5s ease}
+  body.rest #ctrl, body.rest #keys{opacity:0}
+  body.rest #ctrl{pointer-events:none}
+  /* ?embed=1 — 在展示頁的 iframe 裡預覽時只留錶面 */
+  body.embed #ctrl, body.embed #keys, body.embed #crt{display:none}
+  @media (max-width:640px){ #keys{display:none} #hudBot{flex-direction:column;align-items:stretch} #ctrl{justify-content:center} }
+  @media (prefers-reduced-motion:reduce){ #p1 .lbl{animation:none} }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="crt"></div>
+
+  <div class="hud" id="hudTop">
+    <div id="p1"><span class="lbl">1UP</span><br><span class="val" id="score">000000</span></div>
+    <div class="col"><span class="lbl">HI-SCORE</span><br><span class="val">086400</span></div>
+    <div id="hudRight"><span class="lbl">STAGE</span><br><span class="val" id="stageNo">—</span></div>
+  </div>
+
+  <div class="hud" id="hudBot">
+    <div id="wave">
+      <div id="waveLabel">下一波來襲</div>
+      <div id="bar"><div id="fill"></div></div>
+    </div>
+    <div id="ctrl">
+      <button id="bInstall" hidden>安裝</button>
+      <button id="bTest">攻擊</button>
+      <button id="bFmt" aria-pressed="true">24 小時</button>
+      <button id="bSnd" aria-pressed="false">音效</button>
+      <button id="bWake" aria-pressed="false">防休眠</button>
+      <button id="bFull">全螢幕</button>
+    </div>
+  </div>
+  <div id="keys">空白鍵 攻擊 · T 時制 · S 音效 · W 防休眠 · F 全螢幕</div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const FONT = {
+  '0':["01110","10001","10011","10101","11001","10001","01110"],
+  '1':["00100","01100","00100","00100","00100","00100","01110"],
+  '2':["01110","10001","00001","00010","00100","01000","11111"],
+  '3':["11111","00010","00100","00010","00001","10001","01110"],
+  '4':["00010","00110","01010","10010","11111","00010","00010"],
+  '5':["11111","10000","11110","00001","00001","10001","01110"],
+  '6':["00110","01000","10000","11110","10001","10001","01110"],
+  '7':["11111","00001","00010","00100","01000","01000","01000"],
+  '8':["01110","10001","10001","01110","10001","10001","01110"],
+  '9':["01110","10001","10001","01111","00001","00010","01100"]
+};
+
+const BEE  = ["..1..1..",".111111.","31222213","31111113","33111133",".311113.","..3113..",".3....3."];
+const SHIP = ["...11...","...22...","..1221..",".112211.",".111111.","11111111","11111111","1.1..1.1"];
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let COL_BEE, COL_SHIP, C_VOID, C_STAR, C_BULLET, C_SPARK;
+function readColors(){
+  COL_BEE  = {'1':css('--bee'), '2':css('--bee-eye'), '3':css('--wing')};
+  COL_SHIP = {'1':css('--ship'),'2':css('--ship-red'),'3':css('--ship')};
+  C_VOID=css('--void'); C_STAR=css('--star'); C_BULLET=css('--bullet'); C_SPARK=css('--spark');
+}
+
+// ── 版面：長寬比 >= 1.25 走橫式一行，否則 HH 疊 MM ──────────────
+const STACK_RATIO = 1.25;
+let W=0,H=0,dpr=1,cell=10,originX=0,originY=0,stack=false,booted=false;
+let GRID_COLS=24, GRID_ROWS=7, POS=[];
+
+function layout(){
+  W = cv.clientWidth; H = cv.clientHeight;
+  dpr = Math.min(window.devicePixelRatio||1, 2);
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.imageSmoothingEnabled = false;
+
+  const wasStack = stack;
+  stack = (W/H) < STACK_RATIO;
+
+  if(stack){
+    GRID_COLS = 11; GRID_ROWS = 15;
+    POS = [{c:0,r:0},{c:6,r:0},{c:0,r:8},{c:6,r:8}];
+    cell = Math.min(W/(GRID_COLS+3), H/(GRID_ROWS+7));
+  }else{
+    GRID_COLS = 24; GRID_ROWS = 7;
+    POS = [{c:0,r:0},{c:6,r:0},{c:13,r:0},{c:19,r:0}];
+    cell = Math.min(W/(GRID_COLS+5), H/(GRID_ROWS+11));
+  }
+  originX = (W - GRID_COLS*cell)/2;
+  originY = (H - GRID_ROWS*cell)/2 - (stack ? 0 : cell*0.6);
+
+  makeStars();
+  retarget();
+  if(!booted || wasStack !== stack) syncColon(booted);
+}
+
+let stars=[];
+function makeStars(){
+  stars=[];
+  const n = Math.round((W*H)/9000);
+  for(let i=0;i<n;i++){
+    const layer = i%3;
+    stars.push({x:Math.random()*W, y:Math.random()*H, l:layer,
+                s:(layer+1)*(RM?4:18), a:0.25+layer*0.28, ph:Math.random()*6.28});
+  }
+}
+
+let enemies=[], bullets=[], sparks=[], runs=[];
+let time=0, h24=true, sound=false;
+// want = 想顯示的；drawn = 畫面上真的已經放好的
+let want=['','','',''], drawn=['','','',''];
+
+function commit(d, ch){
+  drawn[d] = ch;
+  document.documentElement.dataset.shown = drawn.join('');
+}
+
+const easeOut   = t => 1-Math.pow(1-t,3);
+const easeInOut = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
+
+function targetOf(d,r,c){
+  const p = POS[d];
+  return { x: originX + (p.c+c+0.5)*cell, y: originY + (p.r+r+0.5)*cell };
+}
+
+function spawnEnemy(d,r,c,delay){
+  const t = targetOf(d,r,c);
+  const fromLeft = ((c+r)%2)===0;
+  const p0 = {x: fromLeft ? -cell*5 : W+cell*5, y: H+cell*4};
+  const p1 = {x: fromLeft ? W*0.20 : W*0.80,    y: -cell*5};
+  enemies.push({d,r,c, tx:t.x, ty:t.y, x:p0.x, y:p0.y, p0, p1,
+                delay, t:0, state:'enter', rot:0, ph:Math.random()*6.28, alive:true});
+}
+
+function buildDigit(d, ch, delayBase){
+  const g = FONT[ch]; if(!g) return;
+  commit(d, ch);
+  let i=0;
+  for(let r=0;r<7;r++) for(let c=0;c<5;c++){
+    if(g[r][c]==='1'){ spawnEnemy(d,r,c, delayBase + i*0.03); i++; }
+  }
+}
+
+function colonXY(i){
+  return { x: originX + 11.5*cell, y: originY + ([2,4][i]+0.5)*cell };
+}
+
+// 冒號只存在於橫式版面；切換版面時整組重建，避免留在錯誤座標
+function syncColon(animate){
+  enemies = enemies.filter(e => e.d >= 0);
+  if(stack) return;
+  for(let i=0;i<2;i++){
+    const p = colonXY(i);
+    enemies.push({
+      d:-1, r:[2,4][i], c:0, tx:p.x, ty:p.y,
+      x:p.x, y: animate ? p.y : -cell*6,
+      p0:{x:p.x, y:-cell*6}, p1:{x:p.x, y:-cell*6},
+      delay: animate ? 0 : 0.5+i*0.1, t:0,
+      state: animate ? 'idle' : 'enter', rot:0, ph:i*2, alive:true
+    });
+  }
+}
+
+function retarget(){
+  enemies.forEach(e=>{
+    if(e.d<0){ const p=colonXY(e.r===2?0:1); e.tx=p.x; e.ty=p.y; }
+    else{ const t=targetOf(e.d,e.r,e.c); e.tx=t.x; e.ty=t.y; }
+    if(e.state==='idle'){ e.x=e.tx; e.y=e.ty; }
+  });
+}
+
+function timeStr(){
+  const d=new Date(); let h=d.getHours();
+  if(!h24){ h=h%12; if(h===0) h=12; }
+  return String(h).padStart(2,'0')+String(d.getMinutes()).padStart(2,'0');
+}
+
+function startChange(next, forceAll){
+  let k = 0;
+  for(let d=0; d<4; d++){
+    if(!forceAll && want[d] === next[d]) continue;
+    if(runs.some(r => r.d === d)) continue;   // 還在打，下一幀再試
+    want[d] = next[d];
+    runs.push({d, ch:next[d], delay:k*0.28, t:0, age:0, phase:'wait',
+               ship:null, fired:[false,false,false,false,false]});
+    k++;
+  }
+}
+
+const shipLine = d => originY + (POS[d].r+7)*cell + cell*1.9;
+
+function updateRuns(dt){
+  for(let i=runs.length-1;i>=0;i--){
+    const R=runs[i]; R.t+=dt; R.age+=dt;
+
+    // 看門狗：不讓任何 run 永久佔住某個數字
+    if(R.age > 15){
+      enemies.forEach(e => { if(e.d===R.d) e.alive=false; });
+      buildDigit(R.d, R.ch, 0);
+      runs.splice(i,1); continue;
+    }
+
+    if(R.phase==='wait'){
+      if(R.t>=R.delay){ R.phase='sweep'; R.t=0; R.ship={x:0,y:shipLine(R.d),a:1}; }
+      continue;
+    }
+
+    if(R.phase==='sweep'){
+      const dur=1.0, k=Math.min(R.t/dur,1);
+      const x0=originX+(POS[R.d].c-1.4)*cell, x1=originX+(POS[R.d].c+6.4)*cell;
+      R.ship.x = x0+(x1-x0)*easeInOut(k);
+      R.ship.y = shipLine(R.d) + cell*9*(1-easeOut(Math.min(R.t/0.22,1)));
+      R.ship.a = k>0.86 ? (1-(k-0.86)/0.14) : 1;
+
+      for(let c=0;c<5;c++){
+        const cx = originX+(POS[R.d].c+c+0.5)*cell;
+        if(!R.fired[c] && R.ship.x>=cx && R.t>0.18){
+          R.fired[c]=true;
+          bullets.push({x:cx, y:R.ship.y-cell*0.5, d:R.d,
+                        top: originY+POS[R.d].r*cell - cell*1.2});
+          blip('shoot');
+        }
+      }
+      if(k>=1){ R.phase='clear'; R.t=0; R.ship=null; }
+      continue;
+    }
+
+    if(R.phase==='clear'){
+      const left = enemies.some(e=>e.d===R.d && e.alive);
+      if(!left || R.t>0.9){
+        enemies.forEach(e=>{ if(e.d===R.d && e.alive) kill(e); });
+        buildDigit(R.d, R.ch, 0.05);
+        runs.splice(i,1);
+      }
+    }
+  }
+}
+
+function kill(e){
+  e.alive=false;
+  for(let i=0;i<9;i++){
+    const a=Math.random()*6.28, s=(0.5+Math.random())*cell*3.2;
+    sparks.push({x:e.x,y:e.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.42,max:0.42});
+  }
+  blip('boom');
+}
+
+function update(dt){
+  startChange(timeStr(), false);   // 每幀比對，卡住的數字會自己追上
+  updateRuns(dt);
+
+  for(const s of stars){ s.y += s.s*dt; if(s.y>H){ s.y=-2; s.x=Math.random()*W; } }
+
+  for(const e of enemies){
+    if(!e.alive) continue;
+    if(e.state==='enter'){
+      e.t+=dt;
+      const k=Math.max(0,(e.t-e.delay)/(RM?0.5:0.95));
+      if(k<=0) continue;
+      const u=easeOut(Math.min(k,1)), v=1-u;
+      e.x = v*v*e.p0.x + 2*v*u*e.p1.x + u*u*e.tx;
+      e.y = v*v*e.p0.y + 2*v*u*e.p1.y + u*u*e.ty;
+      const dx = 2*v*(e.p1.x-e.p0.x)+2*u*(e.tx-e.p1.x);
+      const dy = 2*v*(e.p1.y-e.p0.y)+2*u*(e.ty-e.p1.y);
+      e.rot = Math.atan2(dy,dx)+Math.PI/2;
+      if(u>0.8) e.rot *= (1-u)/0.2;
+      if(k>=1){ e.state='idle'; e.rot=0; }
+    }else{
+      const w = RM?0:1;
+      e.x = e.tx + Math.sin(time*1.25+e.ph)*cell*0.10*w;
+      e.y = e.ty + Math.sin(time*1.9+e.ph*1.7)*cell*0.08*w;
+    }
+  }
+  enemies = enemies.filter(e=>e.alive);
+
+  for(let i=bullets.length-1;i>=0;i--){
+    const b=bullets[i]; b.y -= cell*26*dt;
+    for(const e of enemies){
+      if(e.alive && e.d===b.d && e.state!=='enter' &&
+         Math.abs(e.x-b.x)<cell*0.55 && Math.abs(e.y-b.y)<cell*0.55) kill(e);
+    }
+    if(b.y<b.top) bullets.splice(i,1);
+  }
+
+  for(let i=sparks.length-1;i>=0;i--){
+    const p=sparks[i]; p.life-=dt;
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.9; p.vy*=0.9;
+    if(p.life<=0) sparks.splice(i,1);
+  }
+}
+
+function sprite(map, cx, cy, px, rot, colors, alpha){
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(cx,cy);
+  if(rot) ctx.rotate(rot);
+  const o = -px*4;
+  for(let r=0;r<8;r++){
+    const row=map[r];
+    for(let c=0;c<8;c++){
+      const ch=row[c];
+      if(ch==='.') continue;
+      ctx.fillStyle = colors[ch];
+      ctx.fillRect(Math.round(o+c*px), Math.round(o+r*px), Math.ceil(px), Math.ceil(px));
+    }
+  }
+  ctx.restore();
+}
+
+function draw(){
+  ctx.fillStyle = C_VOID;
+  ctx.fillRect(0,0,W,H);
+
+  ctx.fillStyle = C_STAR;
+  for(const s of stars){
+    ctx.globalAlpha = s.a*(0.65+0.35*Math.sin(time*2+s.ph));
+    ctx.fillRect(s.x|0, s.y|0, s.l===2?2:1, s.l===2?2:1);
+  }
+  ctx.globalAlpha=1;
+
+  const px = (cell*0.92)/8;
+  const colonPulse = 0.35+0.65*(0.5+0.5*Math.cos(time*Math.PI*2));
+  for(const e of enemies){
+    if(e.state==='enter' && e.t<e.delay) continue;
+    sprite(BEE, e.x, e.y, px, e.rot, COL_BEE, e.d<0 ? colonPulse : 1);
+  }
+
+  ctx.fillStyle = C_BULLET;
+  for(const b of bullets) ctx.fillRect(b.x-cell*0.06, b.y, Math.max(2,cell*0.12), cell*0.5);
+
+  for(const p of sparks){
+    const k=p.life/p.max;
+    ctx.globalAlpha=k;
+    ctx.fillStyle = k>0.55 ? C_BULLET : C_SPARK;
+    const s=Math.max(2,cell*0.22*k+1);
+    ctx.fillRect(p.x-s/2,p.y-s/2,s,s);
+  }
+  ctx.globalAlpha=1;
+
+  for(const R of runs) if(R.ship) sprite(SHIP, R.ship.x, R.ship.y, px, 0, COL_SHIP, R.ship.a);
+}
+
+// ── 音效 ────────────────────────────────────────────────────────
+let actx=null;
+function blip(kind){
+  if(!sound) return;
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    const o=actx.createOscillator(), g=actx.createGain(), t=actx.currentTime;
+    o.type='square';
+    if(kind==='shoot'){
+      o.frequency.setValueAtTime(920,t); o.frequency.exponentialRampToValueAtTime(320,t+0.07);
+      g.gain.setValueAtTime(0.035,t);    g.gain.exponentialRampToValueAtTime(0.001,t+0.08);
+      o.connect(g).connect(actx.destination); o.start(t); o.stop(t+0.09);
+    }else{
+      o.frequency.setValueAtTime(200,t); o.frequency.exponentialRampToValueAtTime(45,t+0.16);
+      g.gain.setValueAtTime(0.045,t);    g.gain.exponentialRampToValueAtTime(0.001,t+0.18);
+      o.connect(g).connect(actx.destination); o.start(t); o.stop(t+0.19);
+    }
+  }catch(_){}
+}
+
+// ── HUD ─────────────────────────────────────────────────────────
+const elScore=document.getElementById('score');
+const elStage=document.getElementById('stageNo');
+const elFill=document.getElementById('fill');
+function hud(){
+  const d=new Date();
+  const secs = d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds();
+  elScore.textContent = String(secs).padStart(6,'0');
+  elStage.textContent = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
+  elFill.style.width = ((d.getSeconds()+d.getMilliseconds()/1000)/60*100).toFixed(1)+'%';
+}
+
+// ── 控制 ────────────────────────────────────────────────────────
+const bFmt=document.getElementById('bFmt'), bSnd=document.getElementById('bSnd'),
+      bWake=document.getElementById('bWake'), bFull=document.getElementById('bFull'),
+      bInstall=document.getElementById('bInstall');
+
+document.getElementById('bTest').onclick = () => startChange(timeStr(), true);
+bFmt.onclick = () => { h24=!h24; bFmt.textContent = h24?'24 小時':'12 小時';
+  bFmt.setAttribute('aria-pressed', String(h24)); startChange(timeStr(), true); };
+bSnd.onclick = () => { sound=!sound; bSnd.setAttribute('aria-pressed', String(sound)); if(sound) blip('shoot'); };
+bFull.onclick = () => {
+  const s=document.getElementById('stage');
+  if(document.fullscreenElement) document.exitFullscreen(); else s.requestFullscreen?.();
+};
+
+// 螢幕防休眠：當桌面／牆上時鐘時需要
+let wl=null, keepAwake=false;
+async function setWake(on){
+  keepAwake=on;
+  bWake.setAttribute('aria-pressed', String(on));
+  try{
+    if(on && 'wakeLock' in navigator){ wl = await navigator.wakeLock.request('screen'); }
+    else if(wl){ await wl.release(); wl=null; }
+  }catch(_){}
+}
+bWake.onclick = () => setWake(!keepAwake);
+document.addEventListener('visibilitychange', () => {
+  if(keepAwake && document.visibilityState==='visible') setWake(true);
+});
+
+addEventListener('keydown', e=>{
+  if(e.target.tagName==='BUTTON') return;
+  const k=e.key.toLowerCase();
+  if(k===' '){ e.preventDefault(); startChange(timeStr(), true); }
+  if(k==='t') bFmt.click();
+  if(k==='s') bSnd.click();
+  if(k==='w') bWake.click();
+  if(k==='f') bFull.click();
+});
+addEventListener('resize', layout);
+addEventListener('orientationchange', () => setTimeout(layout,120));
+
+// 閒置四秒後把按鈕淡出，讓畫面乾淨
+let restTimer=null;
+function wake(){
+  document.body.classList.remove('rest');
+  clearTimeout(restTimer);
+  restTimer=setTimeout(()=>document.body.classList.add('rest'), 4000);
+}
+['pointermove','pointerdown','keydown','touchstart'].forEach(ev=>addEventListener(ev,wake,{passive:true}));
+wake();
+
+// ── PWA ─────────────────────────────────────────────────────────
+let deferred=null;
+addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); deferred=e; bInstall.hidden=false; });
+bInstall.onclick = async () => {
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice;
+  deferred=null; bInstall.hidden=true;
+};
+addEventListener('appinstalled', ()=>{ bInstall.hidden=true; });
+
+// 被展示頁 iframe 嵌入時不註冊 sw，否則滑過去每個時鐘都會裝一份
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+// ── 啟動 ────────────────────────────────────────────────────────
+readColors();
+layout();
+want = timeStr().split('');
+for(let d=0; d<4; d++) buildDigit(d, want[d], d*0.16);
+booted = true;
+hud(); setInterval(hud, 100);
+
+let last=performance.now();
+(function frame(now){
+  const dt=Math.min((now-last)/1000, 0.05); last=now; time+=dt;
+  update(dt); draw();
+  requestAnimationFrame(frame);
+})(last);
+})();
+</script>
+</body>
+</html>

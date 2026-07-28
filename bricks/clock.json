@@ -1,0 +1,14 @@
+{
+  "id": "bricks",
+  "name": "敲磚時鐘",
+  "tagline": "數字是磚塊。分鐘一變，師傅跑過來從下面把它頂碎，新的磚塊再從天上掉下來",
+  "created": "2026-07-27",
+  "tags": ["platformer", "canvas", "pwa"],
+  "accent": "#d9763a",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-27T10:09:03+08:00",
+    "settle": 2600
+  }
+}
