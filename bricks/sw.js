@@ -1,5 +1,5 @@
-// 敲磚時鐘 service worker
-const VERSION = 'bricks-v1';
+// 工地時鐘 service worker
+const VERSION = 'bricks-v2';
 const SHELL = [
   './',
   './index.html',

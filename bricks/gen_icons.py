@@ -1,9 +1,9 @@
 from PIL import Image, ImageDraw
 
-BRICK = ["XXXXXXXX", "XHHHHHHX", "XOOOXOOX", "XOOOXOOX",
-         "XXXXXXXX", "XOXOOOOX", "XSXSSSSX", "XXXXXXXX"]
-C = {'X': (36,16,6), 'H': (246,176,112), 'O': (217,118,58), 'S': (168,81,31)}
-SKY = (194,228,247)
+BRICK = ["XXXXXXXX", "XHHHHHHX", "XHAAAADX", "XHAAAADX",
+         "XXXXXXXX", "XHAAAADX", "XDDDDDDX", "XXXXXXXX"]
+C = {'X': (0,0,0), 'H': (248,248,248), 'A': (188,188,188), 'D': (124,124,124)}
+SKY = (124,124,124)
 
 def render(size, inset):
     img = Image.new("RGB", (size, size), SKY)

@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>敲磚時鐘</title>
-<meta name="description" content="數字是磚塊。分鐘一變，工地師傅跑過來從下面把它頂碎，新的磚塊再從天上掉下來。">
-<meta name="theme-color" content="#c2e4f7">
+<title>工地時鐘</title>
+<meta name="description" content="數字是水泥磚。分鐘一變，拆除工人先用電鑽把舊磚打掉，砌造工人再把新磚一塊一塊砌回來。">
+<meta name="theme-color" content="#bcbcbc">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="敲磚時鐘">
+<meta name="apple-mobile-web-app-title" content="工地時鐘">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <link rel="icon" href="./icon-192.png">
@@ -17,23 +17,27 @@
 <link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --sky-hi:#6fa8dc;
-    --sky-lo:#e3f2fb;
-    --hill:#4f9e57;
-    --hill-2:#3d8046;
-    --dirt:#8a5a34;
-    --dirt-2:#6b4426;
-    --brick:#d9763a;
-    --brick-hi:#e8a86a;
-    --brick-lo:#8a4420;
-    --brick-sh:#6b3418;
-    --coin:#ffd24a;
-    --coin-2:#b8860b;
-    --ink:#241006;
-    --ink-2:#7a6555;
+    --sky-hi:#7c7c7c;
+    --sky-lo:#d8d8d8;
+    --fence:#585858;
+    --ground:#4a4a4a;
+    --ground-2:#3a3a3a;
+    --concrete:#bcbcbc;
+    --concrete-hi:#f8f8f8;
+    --concrete-lo:#7c7c7c;
+    --accent:#3cbcfc;
+    --accent-2:#0000fc;
+    --ink:#000000;
+    --ink-2:#5a5a5a;
+    /* HUD 這幾支由 syncPalette() 依時段覆寫，這裡放的是白天值 */
+    --hud:#000000;
+    --hud-key:#3cbcfc;
+    --hud-dim:#5a5a5a;
+    --hud-sh:rgba(255,255,255,.55);
+    --bar-bg:rgba(255,255,255,.45);
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  html,body{height:100%;overflow:hidden;overscroll-behavior:none;background:#c2e4f7}
+  html,body{height:100%;overflow:hidden;overscroll-behavior:none;background:#9a9a9a}
   body{
     font-family:'Silkscreen',ui-monospace,'Courier New',monospace;
     color:var(--ink);-webkit-font-smoothing:none;-webkit-tap-highlight-color:transparent;
@@ -43,19 +47,19 @@
 
   .hud{
     position:absolute;left:0;right:0;pointer-events:none;
-    font-size:clamp(9px,1.7vw,14px);letter-spacing:.04em;
-    padding:max(clamp(10px,2.5vw,22px),env(safe-area-inset-top)) clamp(10px,2.5vw,22px)
+    font-size:clamp(12px,1.7vw,14px);letter-spacing:.04em;line-height:1.5;
+    padding:max(clamp(10px,2.5vw,22px),env(safe-area-inset-top)) clamp(12px,3vw,24px)
             max(clamp(10px,2.5vw,22px),env(safe-area-inset-bottom));
-    text-shadow:0 2px 0 rgba(255,255,255,.55);
+    color:var(--hud);text-shadow:0 2px 0 var(--hud-sh);
   }
   #hudTop{top:0;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
-  .k{color:var(--ink-2);font-size:.75em;letter-spacing:.14em;display:block;margin-bottom:3px}
+  .k{color:var(--hud-key);font-size:clamp(8px,1.1vw,11px);letter-spacing:.14em;display:block;margin-bottom:6px;line-height:1.3}
   #hudBot{bottom:0;display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
 
-  #wave{flex:1;max-width:380px}
-  #waveLabel{color:var(--ink-2);font-size:clamp(8px,1.3vw,11px);margin-bottom:5px;letter-spacing:.1em}
-  #bar{height:10px;border:2px solid var(--ink);background:rgba(255,255,255,.45);position:relative}
-  #fill{position:absolute;inset:0 auto 0 0;width:0;background:var(--brick);transition:width .25s linear}
+  #wave{flex:1;max-width:380px;min-width:0}
+  #waveLabel{color:var(--hud-key);font-size:clamp(10px,1.3vw,12px);margin-bottom:8px;letter-spacing:.1em;white-space:nowrap}
+  #bar{height:10px;border:2px solid var(--hud);background:var(--bar-bg);position:relative}
+  #fill{position:absolute;inset:0 auto 0 0;width:0;background:var(--hud-key);transition:width .25s linear}
 
   #ctrl{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;pointer-events:auto;transition:opacity .5s}
   button{
@@ -66,11 +70,12 @@
   }
   button:active{transform:translate(2px,2px);box-shadow:none}
   button:hover{background:#fff}
-  button:focus-visible{outline:2px solid var(--brick);outline-offset:2px}
-  button[aria-pressed="true"]{background:var(--coin)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--accent);color:#000}
   button[hidden]{display:none}
-  #keys{position:absolute;left:clamp(10px,2.5vw,22px);bottom:max(clamp(10px,2.5vw,22px),env(safe-area-inset-bottom));
-        color:var(--ink-2);font-size:clamp(8px,1.3vw,11px);pointer-events:none;transition:opacity .5s}
+  #keys{position:absolute;left:clamp(12px,3vw,24px);
+        bottom:calc(max(clamp(10px,2.5vw,22px),env(safe-area-inset-bottom)) + 3.6em);
+        color:var(--hud-dim);font-size:clamp(8px,1.3vw,11px);pointer-events:none;transition:opacity .5s}
   body.rest #ctrl,body.rest #keys{opacity:0}
   body.rest #ctrl{pointer-events:none}
   body.embed #ctrl,body.embed #keys{display:none}
@@ -82,25 +87,25 @@
   <canvas id="c"></canvas>
 
   <div class="hud" id="hudTop">
-    <div><span class="k">金幣</span><span id="coins">×00</span></div>
-    <div style="text-align:right"><span class="k">今天</span><span id="date">—</span></div>
+    <div><span class="k">SCRAP</span><span id="coins">×00</span></div>
+    <div style="text-align:right"><span class="k">TODAY</span><span id="date">—</span></div>
   </div>
 
   <div class="hud" id="hudBot">
     <div id="wave">
-      <div id="waveLabel">下一次施工</div>
+      <div id="waveLabel">NEXT SHIFT</div>
       <div id="bar"><div id="fill"></div></div>
     </div>
     <div id="ctrl">
-      <button id="bInstall" hidden>安裝</button>
-      <button id="bTest">開工</button>
-      <button id="bFmt" aria-pressed="true">24 小時</button>
-      <button id="bSnd" aria-pressed="false">音效</button>
-      <button id="bWake" aria-pressed="false">防休眠</button>
-      <button id="bFull">全螢幕</button>
+      <button id="bInstall" hidden>INSTALL</button>
+      <button id="bTest">BUILD</button>
+      <button id="bFmt" aria-pressed="true">24H</button>
+      <button id="bSnd" aria-pressed="false">SOUND</button>
+      <button id="bWake" aria-pressed="false">AWAKE</button>
+      <button id="bFull">FULL</button>
     </div>
   </div>
-  <div id="keys">空白鍵 開工 · T 時制 · S 音效 · W 防休眠 · F 全螢幕</div>
+  <div id="keys">SPACE BUILD · T FORMAT · S SOUND · W AWAKE · F FULL</div>
 </div>
 
 <script>
@@ -125,36 +130,121 @@ const FONT = {
   '9':["01110","10001","10001","01111","00001","00010","01100"]
 };
 
-const OUT = '#241006';                       // 統一的輪廓色
+// ── NES 色盤子集 ────────────────────────────────────────────────
+// 每個 sprite 最多 3 個實色 + 透明，共 ≤4 色，符合 NES 單一 tile 的硬體限制。
+// 這是一座時鐘，所以整組配色跟著它自己顯示的小時走：下午兩點打開不該看到深夜工地。
+// 依小時硬切四段，不做漸變補間 —— 一天切四次，每次瞬間換色，這才像 NES。
+const OUT = '#000000';
 
-// 磚塊：外圈輪廓 + 內部灰漿線，亮度拉高才壓得過天空
-const BRICK = [
+// 色票只用 NES 2C02 標準色盤裡真的存在的色（外加原本這座時鐘就在用的幾階灰）。
+// 角色：sky* 天空三段硬邊色帶／edge 遠景剪影／gnd* 地面鋪面／soil* 地面以下土層／
+//       brk* 水泥磚亮基暗／wear 工作服／vest+hat 砌造組／accent 工程藍／lamp 夜間投光燈
+const PALETTES = {
+  // 白天 07-15：原本這版，一個字都不動
+  day: {
+    skyHi:'#7c7c7c', skyMid:'#d8d8d8', skyLo:'#9a9a9a', edge:'#585858',
+    gndT:'#f8f8f8', gndD:'#7c7c7c', gndP:'#585858', soil:'#4a4a4a', soil2:'#3a3a3a',
+    brkH:'#f8f8f8', brkA:'#bcbcbc', brkD:'#7c7c7c',
+    plank:'#bcbcbc', post:'#585858', shard:'#7c7c7c', dust:'#f8f8f8', haze:'#d8d8d8',
+    spark:'#f87858', accent:'#3cbcfc', wear:'#bcbcbc', vest:'#3cbcfc', hat:'#f8f8f8',
+    lamp:null,
+    hud:'#000000', hudKey:'#3cbcfc', hudDim:'#5a5a5a',
+    hudSh:'rgba(255,255,255,.55)', barBg:'rgba(255,255,255,.45)'
+  },
+  // 清晨 05-06：魚肚白，冷調微亮，天頂還留著夜色
+  dawn: {
+    skyHi:'#4428bc', skyMid:'#a4e4fc', skyLo:'#b8b8f8', edge:'#4428bc',
+    gndT:'#b8b8f8', gndD:'#787878', gndP:'#4428bc', soil:'#004058', soil2:'#000000',
+    brkH:'#fcfcfc', brkA:'#b8b8f8', brkD:'#787878',
+    plank:'#bcbcbc', post:'#4428bc', shard:'#787878', dust:'#fcfcfc', haze:'#b8b8f8',
+    spark:'#f83800', accent:'#0058f8', wear:'#bcbcbc', vest:'#0058f8', hat:'#fcfcfc',
+    lamp:null,
+    hud:'#fcfcfc', hudKey:'#a4e4fc', hudDim:'#b8b8f8',
+    hudSh:'#000000', barBg:'#000000'
+  },
+  // 黃昏 16-17：低角度橘紅光，只有朝上的面被打亮，其餘壓成暖褐
+  dusk: {
+    skyHi:'#881400', skyMid:'#fca044', skyLo:'#e45c10', edge:'#503000',
+    gndT:'#f0d0b0', gndD:'#503000', gndP:'#000000', soil:'#503000', soil2:'#000000',
+    brkH:'#fce0a8', brkA:'#bcbcbc', brkD:'#503000',
+    plank:'#f0d0b0', post:'#503000', shard:'#503000', dust:'#fce0a8', haze:'#f0d0b0',
+    spark:'#f83800', accent:'#0058f8', wear:'#bcbcbc', vest:'#0058f8', hat:'#fce0a8',
+    lamp:null,
+    hud:'#fce0a8', hudKey:'#3cbcfc', hudDim:'#f0d0b0',
+    hudSh:'#000000', barBg:'#000000'
+  },
+  // 夜間 18-04：深藍夜，對比最強。磚偏冷偏暗，工程藍與火花在暗底上自己會跳出來
+  night: {
+    skyHi:'#000000', skyMid:'#0000bc', skyLo:'#4428bc', edge:'#000000',
+    gndT:'#787878', gndD:'#004058', gndP:'#000000', soil:'#000000', soil2:'#004058',
+    brkH:'#bcbcbc', brkA:'#787878', brkD:'#004058',
+    plank:'#bcbcbc', post:'#004058', shard:'#787878', dust:'#787878', haze:'#6888fc',
+    spark:'#fca044', accent:'#3cbcfc', wear:'#bcbcbc', vest:'#3cbcfc', hat:'#f8f8f8',
+    lamp:['#fce0a8','#f8b800'],
+    hud:'#fcfcfc', hudKey:'#3cbcfc', hudDim:'#6888fc',
+    hudSh:'#000000', barBg:'#000000'
+  }
+};
+
+const periodOf = h => (h>=5 && h<=6) ? 'dawn' : (h>=7 && h<=15) ? 'day'
+                    : (h>=16 && h<=17) ? 'dusk' : 'night';
+
+let PAL = PALETTES.day, palKey = '';
+
+// 每幀重算，純粹看「當下這個小時」，不快取成啟動時決定 ——
+// 掛一整天的時鐘要能在 18:00 自己變成夜間
+function syncPalette(){
+  const k = periodOf(new Date().getHours());
+  if(k === palKey) return;
+  palKey = k; PAL = PALETTES[k];
+  COL_BRICK.H = PAL.brkH; COL_BRICK.A = PAL.brkA; COL_BRICK.D = PAL.brkD;
+  COL_GROUND.T = PAL.gndT; COL_GROUND.D = PAL.gndD; COL_GROUND.P = PAL.gndP;
+  COL_BOLT.A = PAL.wear;  COL_BOLT.H = PAL.accent;
+  COL_TOOL.C = PAL.accent;
+  COL_DEMO.H = PAL.accent; COL_DEMO.B = PAL.wear;
+  COL_BUILD.H = PAL.hat;   COL_BUILD.B = PAL.vest;
+  COL_IDLE.H = PAL.accent; COL_IDLE.B = PAL.wear;
+  COL_CART.A = PAL.wear;
+  const st = document.documentElement.style;
+  st.setProperty('--accent', PAL.accent);
+  st.setProperty('--hud', PAL.hud);
+  st.setProperty('--hud-key', PAL.hudKey);
+  st.setProperty('--hud-dim', PAL.hudDim);
+  st.setProperty('--hud-sh', PAL.hudSh);
+  st.setProperty('--bar-bg', PAL.barBg);
+}
+
+// 水泥磚：拆除與砌造共用同一副骨架，只是被拆時已經站在原地。
+// 純灰階三階（亮面／基底／暗面）＋黑色磚縫，不放任何 accent —— 藍色只留給人造物／機具
+const BRICK_MAP = [
   "XXXXXXXX",
   "XHHHHHHX",
-  "XOOOXOOX",
-  "XOOOXOOX",
+  "XHAAAADX",
+  "XHAAAADX",
   "XXXXXXXX",
-  "XOXOOOOX",
-  "XSXSSSSX",
+  "XHAAAADX",
+  "XDDDDDDX",
   "XXXXXXXX"
 ];
-const C_BRICK = {X:OUT, H:'#f6b070', O:'#d9763a', S:'#a8511f'};
+// ORDER 是這張圖的上色順序（暗到亮），跟色票分開存 —— 長條之間有 1px 的重疊，
+// 誰後畫誰壓在上面，順序寫死才不會換個時段連磚縫粗細都跟著變
+const COL_BRICK = {X:OUT, H:'#f8f8f8', A:'#bcbcbc', D:'#7c7c7c', ORDER:'XDAH'};
 
-// 金磚：每個數字隨機一塊，敲掉噴五枚金幣
-const GOLD = [
-  "XXXXXXXX",
-  "XGGGGGGX",
-  "XGGGKGGX",
-  "XGGKKKGX",
-  "XGKKKKKX",
-  "XGGKKKGX",
-  "XGGGKGGX",
-  "XXXXXXXX"
+// 拆除工地上偶爾挖到的舊零件（取代金幣）
+const BOLT_MAP = [
+  "..XXXX..",
+  ".XAAAAX.",
+  "XAAHHAAX",
+  "XAHXXHAX",
+  "XAHXXHAX",
+  "XAAHHAAX",
+  ".XAAAAX.",
+  "..XXXX.."
 ];
-const C_GOLD = {X:OUT, G:'#f2c53d', K:'#8a5a10'};
+const COL_BOLT = {X:OUT, A:'#bcbcbc', H:'#3cbcfc', ORDER:'XHA'};
 
-// 地面磚
-const GROUND = [
+// 地面：碎石／柏油鋪面
+const GROUND_MAP = [
   "XXXXXXXX",
   "XTTTTTTX",
   "XDDDDDDX",
@@ -164,54 +254,91 @@ const GROUND = [
   "XDDDDDDX",
   "XXXXXXXX"
 ];
-const C_GROUND = {X:OUT, T:'#9a8f7a', D:'#6a6558', P:'#454236'};
+const COL_GROUND = {X:OUT, T:'#f8f8f8', D:'#7c7c7c', P:'#585858', ORDER:'XPDT'};
 
-// 原創角色。16x16，帶輪廓，上半身固定、下半身三種姿勢
-const BODY = [
-  ".....XXXXXX.....",
-  "....XCCCCCCX....",
-  "...XCCCCCCCCX...",
-  "..XCCCCCCCCCCX..",
-  ".XCCCCCCCCCCCCX.",
-  ".XSSSSSSSSSSSSX.",
-  ".XSSEESSSSEESSX.",
-  ".XSSSSSSSSSSSSX.",
-  "..XSSSSSSSSSSX..",
-  "..XBBBBBBBBBBX..",
-  ".XBBOOOOOOOOBBX.",
-  "XSXBOOOOOOOOBXSX",
-  "XSXBOOOOOOOOBXSX"
+// 電鑽：由下往上打，最上面那格就是鑽頭尖端，正好頂住正在崩解的那一排磚
+const TOOL_DRILL = [
+  "..XX..",
+  "..XX..",
+  ".XXXX.",
+  ".XCCX.",
+  "XXCCXX",
+  "XCCCCX",
+  "XXXXXX"
 ];
-const LEGS = {
-  stand: ["..XOOOOOOOOOOX..", "..XOOXX..XXOOX..", ".XFFFX...XFFFX.."],
-  run:   ["..XOOOOOOOOOOX..", ".XOOXX....XXOOX.", "XFFFX......XFFFX"],
-  jump:  ["..XOOOOOOOOOOX..", "..XOOOOOOOOOOX..", ".XFFFXXXXXXFFFX."],
-  skid:  ["..XOOOOOOOOOOX..", "XOOXX.....XXOOX.", "XFFFFX.....XFFX."]
-};
-// 師傅（橘帽）與他的好兄弟（綠帽）
-const CREW = [
-  {X:OUT, C:'#e8873a', S:'#f7d3ab', E:'#241006', B:'#2fa8a0', O:'#4a6fa8', F:'#3a2a1a'},
-  {X:OUT, C:'#4caf50', S:'#f7d3ab', E:'#241006', B:'#f0c341', O:'#2f4a7a', F:'#3a2a1a'}
-];
+const COL_TOOL = {X:OUT, C:'#3cbcfc', ORDER:'XC'};
 
-const COIN = [
-  "..XXXX..",
-  ".XGGGGX.",
-  "XGLLLLGX",
-  "XGLWWLGX",
-  "XGLLLLGX",
-  "XGLLLLGX",
-  ".XGGGGX.",
-  "..XXXX.."
+// 砌造組的推車，站在旁邊，跟拆除組單靠一個人蹲低頂鑽的剪影完全不同
+const CART_MAP = [
+  "XXXXXXXXX",
+  "XAAAAAAAX",
+  "XXXXXXXXX",
+  "..X...X..",
+  ".XXX.XXX."
 ];
-const C_COIN = {X:OUT, G:'#c8941a', L:'#ffd85a', W:'#fff5c0'};
+const COL_CART = {X:OUT, A:'#bcbcbc', ORDER:'XA'};
+
+// 兩組工人在剪影層級就要分得出來，不能只靠帽子顏色。
+// 每張圖的第 0 排就是「手」，工具／磚塊接在手上方 —— 畫的時候用手當錨點，
+// 工人自然就掛在他正在處理的那塊磚底下。
+//
+// 拆除組：12 寬 x 11 高的矮胖蹲姿。安全帽在最頂、帽簷下留一張窄臉（這格是
+// 「看起來像人而不是機具」的關鍵），雙腿大開下蹲，右手往上舉著電鑽。
+const DEMO_BODY = [
+  ".........XXX",
+  "..XXXXX..XBX",
+  ".XXHHHXX.XBX",
+  ".XHHHHHX.XBX",
+  "XXXXXXXXXXBX",
+  "..XBBBX.XXBX",
+  ".XXXXXXX.XBX",
+  ".XBBBBBXXBX.",
+  "XBXBBBXXX...",
+  ".XXBBBXX....",
+  "XBBX.XBBX...",
+  "XXX...XXX..."
+];
+const COL_DEMO = {X:OUT, H:'#3cbcfc', B:'#bcbcbc', ORDER:'XHB'};
+
+// 砌造組：12 寬 x 13 高的瘦高站姿，單手把磚舉上去放好，旁邊擺一台推車
+const BUILD_BODY = [
+  ".........XXX",
+  "..XXXXX..XBX",
+  ".XXHHHXX.XBX",
+  ".XHHHHHX.XBX",
+  "XXXXXXXXXXBX",
+  "..XBBBX.XXBX",
+  "..XXXXX.XBBX",
+  ".XBBBBBXXBX.",
+  "XBXBBBXXX...",
+  "XBXBBBXX....",
+  ".XXBBBXX....",
+  "..XBXBX.....",
+  ".XXX.XXX...."
+];
+const COL_BUILD = {X:OUT, H:'#f8f8f8', B:'#3cbcfc', ORDER:'XBH'};
+
+// 沒在施工的時候站在工地邊上的工頭 —— 這座時鐘任何一幀都看得到人
+const IDLE_BODY = [
+  "..XXXXX..",
+  ".XXHHHXX.",
+  ".XHHHHHX.",
+  "XXXXXXXXX",
+  "..XBBBX..",
+  "..XXXXX..",
+  ".XBBBBBX.",
+  "XBXBBBXBX",
+  "XBXBBBXBX",
+  ".XXBBBXX.",
+  "..XBXBX..",
+  ".XXX.XXX."
+];
+const COL_IDLE = {X:OUT, H:'#3cbcfc', B:'#bcbcbc', ORDER:'XHB'};
 
 // ── 背景開關 ────────────────────────────────────────────────────
-// 想關掉哪個就改成 false，改完重新整理即可
 const SHOW = {
-  clouds: false,   // 天上的雲。畫成帶輪廓的方塊之後跟磚塊太像，預設關掉
-  hills:  true,    // 地平線上的遠山
-  bushes: true     // 地平線上的灌木叢
+  cranes: true,   // 遠景吊車剪影
+  fence:  true    // 地平線上的圍籬
 };
 
 // ── 版面 ────────────────────────────────────────────────────────
@@ -241,46 +368,26 @@ function layout(){
   originX = (W - GRID_COLS*cell)/2;
   originY = (H - GRID_ROWS*cell)/2 - cell*1.4;
 
-  makeClouds();
   bricks.forEach(b => {
     const t = targetOf(b.d,b.r,b.c);
     b.tx=t.x; b.ty=t.y;
     if(b.state==='idle'){ b.x=b.tx; b.y=b.ty; }
   });
-  runs.forEach(R => {
-    R.gy = ledgeY(POS[R.d].r);
-    if(R.onGround) R.y = R.gy;
-  });
   booted = true;
 }
 
-// 每一排數字腳下都有一條地面，師傅就站在上面
+// 每一排數字腳下都有一條地面，工人就站在上面。
+// 最下面那排是真正的工地地面，留 3.2 格給工人和鷹架；直式版面上排腳下只有
+// 一格空隙，棧板就貼著那格畫，不然橫桿會直接切過下排數字。
 const GAP = 3.2;
-const ledgeY = row => originY + (row+7)*cell + cell*GAP;
-
-let clouds=[];
-function makeClouds(){
-  clouds=[];
-  if(!SHOW.clouds) return;
-  const n = Math.max(3, Math.round(W/420));
-  for(let i=0;i<n;i++)
-    clouds.push({x:Math.random()*W, y:H*0.06+Math.random()*H*0.22,
-                 s:(RM?2:9)+Math.random()*8, k:0.7+Math.random()*0.8});
-}
+const floorRow = () => ROWS[ROWS.length-1];
+const ledgeY = row => originY + (row+7)*cell + cell*(row === floorRow() ? GAP : 0.35);
 
 // ── 實體 ────────────────────────────────────────────────────────
-let bricks=[], shards=[], coins=[], pops=[], dust=[], runs=[];
+let bricks=[], shards=[], bolts=[], pops=[], dust=[], sparks=[], runs=[];
 
-// 起跳、落地、甩尾都噴一下，動作的起訖點才有重量
-function puff(x, y, n, dir){
-  for(let i=0;i<n;i++)
-    dust.push({x:x + (Math.random()-0.5)*cell*0.5, y:y - cell*0.1,
-               vx:(dir||(Math.random()-0.5)*2)*cell*(2+Math.random()*4),
-               vy:-Math.random()*cell*4, life:0.34+Math.random()*0.2, max:0.5,
-               s:cell*(0.16+Math.random()*0.16)});
-}
 let shake=0;
-let time=0, h24=true, sound=false, coinCount=0;
+let time=0, h24=true, sound=false, boltCount=0;
 // want = 想顯示的；drawn = 畫面上真的已經放好的。兩者分開是這支程式的關鍵：
 // 只有真的放好才寫進 drawn，所以任何一步卡住，下一幀都會自己重試。
 let want=['','','',''], drawn=['','','',''];
@@ -297,29 +404,38 @@ function targetOf(d,r,c){
   return { x: originX + (p.c+c+0.5)*cell, y: originY + (p.r+r+0.5)*cell };
 }
 
-function buildDigit(d, ch, delayBase){
-  const g = FONT[ch]; if(!g) return;
+// 唯一的 commit() 呼叫點：FONT[ch] 查不到就整個放棄，drawn 維持原狀
+function buildDigit(d, ch){
+  if(!FONT[ch]) return false;
   commit(d, ch);
-  let i=0;
-  for(let r=6;r>=0;r--) for(let c=0;c<5;c++){
-    if(g[r][c]!=='1') continue;
-    const t = targetOf(d,r,c);
-    bricks.push({d, r, c, tx:t.x, ty:t.y, x:t.x, y:-cell*(3+Math.random()*4),
-                 vy:0, squash:0, bounce:0, gold:false,
-                 state:'fall', delay: delayBase + i*0.045, t:0, alive:true});
-    i++;
-  }
-  // 每個數字挑一塊當金磚
-  const mine = bricks.filter(b => b.alive && b.d===d);
-  if(mine.length) mine[Math.floor(Math.random()*mine.length)].gold = true;
+  return true;
 }
 
-// 某個數字第 c 行最下面那塊磚（師傅要頂的就是它）
-function lowestIn(d, c){
-  let best=null;
-  for(const b of bricks)
-    if(b.alive && b.d===d && b.c===c && (!best || b.r>best.r)) best=b;
-  return best;
+function cellsOf(ch){
+  const g = FONT[ch]; if(!g) return [];
+  const out = [];
+  for(let r=6;r>=0;r--) for(let c=0;c<5;c++) if(g[r][c]==='1') out.push({r,c});
+  return out;
+}
+
+function rowsOf(d){
+  const set = new Set();
+  for(const b of bricks) if(b.alive && b.d===d) set.add(b.r);
+  return [...set].sort((a,b)=>b-a);   // 由下而上
+}
+
+function placeAllCells(d, ch){
+  for(const {r,c} of cellsOf(ch)){
+    const t = targetOf(d,r,c);
+    bricks.push({d, r, c, tx:t.x, ty:t.y, x:t.x, y:t.y, state:'idle', alive:true, pop:1});
+  }
+}
+
+function placeCell(d, r, c){
+  const t = targetOf(d, r, c);
+  bricks.push({d, r, c, tx:t.x, ty:t.y, x:t.x, y:t.y, state:'idle', alive:true, pop:1});
+  puffMortar(t.x, t.y);
+  blip('place');
 }
 
 function timeStr(){
@@ -334,31 +450,65 @@ function startChange(next, forceAll){
     if(!forceAll && want[d] === next[d]) continue;
     if(runs.some(r => r.d === d)) continue;   // 還在施工，下一幀再試
     want[d] = next[d];
-    const cols = [];
-    for(let c=0;c<5;c++) if(lowestIn(d,c)) cols.push(c);
-    if(!cols.length){ buildDigit(d, next[d], 0.05); continue; }
-    const gy = ledgeY(POS[d].r);
+    const oldRows = rowsOf(d);
     runs.push({
-      d, ch:next[d], cols, ci:0, phase:'wait', t:0, age:0, delay:k*0.30,
-      crew:k%CREW.length, gy, built:false,
-      x: originX + (POS[d].c-4)*cell, y: gy,
-      vx:0, vy:0, face:1, skid:false, squash:0, onGround:true, step:0
+      d, ch: next[d],
+      phase: 'wait', t:0, age:0, delay:k*0.12,
+      hasOld: oldRows.length>0,
+      rows: oldRows, ri:0,
+      salvageRow: oldRows.length ? oldRows[Math.floor(Math.random()*oldRows.length)] : -1,
+      cells: cellsOf(next[d]), ci:0,
+      built:false
     });
     k++;
   }
 }
 
-const CHAR_H = () => cell*2.2;
+// ── 節奏常數：單一數字從第一步到 run 回收，總長務必 < 3.5 秒虛擬時間 ──
+const T_ENTER  = 0.38;   // 進場
+const T_ROW    = 0.12;   // 拆除：每排
+const T_SWAP   = 0.18;   // 拆除組退場／砌造組進場的交接空檔
+const T_CELL   = 0.045;  // 砌造：每塊
+const T_SETTLE = 0.08;   // 最後一塊落定後的短暫停頓
+const T_LEAVE  = 0.36;   // 退場
 
-// 平台遊戲的手感幾乎全在這幾個數字裡。
-// 關鍵是「上升重力小於下降重力」—— 跳躍弧線不對稱，滯空感就出來了，
-// 這是所有經典平台遊戲共用的作法，而且是純物理，不是誰的美術。
-const G_UP    = () => cell*130;   // 上升時
-const G_DOWN  = () => cell*260;   // 下降時，兩倍，落下比較俐落
-const G       = () => cell*200;   // 磚塊等雜物用
-const RUN_ACC = () => cell*90;    // 加速度：不會瞬間到全速
-const RUN_MAX = () => cell*17;
-const SKID_ACC= () => cell*170;   // 反向時的煞車，比加速更快 → 有甩尾感
+// 工人：手到腳的身高，以及手到工具尖端的距離。
+// 兩者加起來 ≈ cell*3.5，剛好等於數字下緣到地面的 GAP，所以打最底下那排時
+// 工人是實實在在站在地上的；往上打就靠鷹架把自己頂上去。
+const RIG_H = () => cell*2.6;
+const REACH = () => cell*0.6;
+const DRILL_L = () => cell*1.2;        // 電鑽全長，工人握在中段
+const DEMO_HAND = 10, BUILD_HAND = 10;  // 「手」在各自點陣圖上的欄
+
+// 這一幀該對付哪一塊磚：拆除看 R.ri（由下往上一排排打），砌造看 R.ci（由下往上一塊塊砌）。
+// 兩邊都是由下往上，所以工人永遠待在已經清空的那一側，不會擋住還沒動到的磚。
+// 回傳的是「工具尖端該頂住的點」，工人的位置再從這點往下推。
+function workAim(R){
+  const p = POS[R.d];
+  const demoing = R.phase==='wait' ? R.hasOld
+                : (R.phase==='enterDemo' || R.phase==='drill' || R.phase==='swap');
+  if(!demoing && R.cells.length){
+    const k = R.cells[Math.min(R.ci, R.cells.length-1)];
+    return { x: targetOf(R.d, k.r, k.c).x, y: originY + (p.r+k.r+1)*cell };
+  }
+  const row = R.rows.length ? R.rows[Math.min(R.ri, R.rows.length-1)] : 6;
+  let sum=0, n=0;
+  for(const b of bricks) if(b.alive && b.d===R.d && b.r===row){ sum+=b.x; n++; }
+  return { x: n ? sum/n : originX + (p.c+2.5)*cell, y: originY + (p.r+row+1)*cell };
+}
+
+// 進退場時才需要水平內插，其餘時候直接用平滑追上去的 R.wx，
+// 全部從目前的 W / originX 現算，resize 或直橫式切換時不需要額外同步。
+function runX(R){
+  const target = R.wx;
+  const offLeft = -cell*5, offRight = W + cell*5;
+  switch(R.phase){
+    case 'enterDemo':  return offLeft  + (target-offLeft)  * easeOut(Math.min(1, R.t/T_ENTER));
+    case 'enterBuild': return offRight + (target-offRight) * easeOut(Math.min(1, R.t/T_ENTER));
+    case 'leave':       return target + (offRight-target) * easeOut(Math.min(1, R.t/T_LEAVE));
+    default: return target;
+  }
+}
 
 function updateRuns(dt){
   for(let i=runs.length-1;i>=0;i--){
@@ -366,157 +516,146 @@ function updateRuns(dt){
 
     // 看門狗：任何情況下都不讓一個 run 永久佔住某個數字
     if(R.age > 15){
-      if(!R.built){ bricks.forEach(b => { if(b.d===R.d) b.alive=false; }); buildDigit(R.d, R.ch, 0); }
+      bricks.forEach(b => { if(b.d===R.d) b.alive=false; });
+      if(!R.built && buildDigit(R.d, R.ch)) placeAllCells(R.d, R.ch);
       runs.splice(i,1); continue;
     }
 
-    if(R.phase==='wait'){ if(R.t>=R.delay){ R.phase='run'; R.t=0; } continue; }
-
-    // 走路動畫
-    if(R.onGround) R.step += dt * (6 + Math.abs(R.vx)/cell*1.1);
-    if(R.squash > 0) R.squash = Math.max(0, R.squash - dt*6);
-
-    if(R.phase==='run' || R.phase==='leave'){
-      const targetX = R.phase==='leave'
-        ? W + cell*6
-        : originX + (POS[R.d].c + R.cols[R.ci] + 0.5)*cell;
-      const dx  = targetX - R.x;
-      const dir = Math.sign(dx);
-
-      // 反向時用更大的減速度，會先滑一段才轉向 —— 這就是甩尾感
-      const skidding = R.vx !== 0 && Math.sign(R.vx) !== dir && Math.abs(R.vx) > cell*4;
-      R.skid = skidding;
-      if(skidding){
-        R.vx -= Math.sign(R.vx) * SKID_ACC() * dt;
-        if(Math.random() < dt*30) puff(R.x - Math.sign(R.vx)*cell*0.4, R.gy, 1, -Math.sign(R.vx));
-      }else{
-        // 剩餘距離不足以煞停就開始減速，才不會衝過頭來回震盪
-        const brake = (R.vx*R.vx) / (2*RUN_ACC());
-        if(Math.abs(dx) > brake) R.vx += dir * RUN_ACC() * dt;
-        else                     R.vx -= Math.sign(R.vx) * RUN_ACC() * dt;
-      }
-      R.vx = Math.max(-RUN_MAX(), Math.min(RUN_MAX(), R.vx));
-      R.x += R.vx * dt;
-      if(R.vx) R.face = Math.sign(R.vx);
-      if(Math.abs(R.vx) > cell*6 && Math.random() < dt*12) puff(R.x, R.gy, 1, -Math.sign(R.vx));
-
-      if(R.phase==='leave'){
-        if(R.x > W + cell*4){ runs.splice(i,1); }
-        continue;
-      }
-      if(Math.abs(dx) < cell*0.3 && Math.abs(R.vx) < cell*4){
-        R.x = targetX; R.vx = 0; R.skid = false;
-        const brick = lowestIn(R.d, R.cols[R.ci]);
-        if(!brick){ nextCol(R,i); continue; }
-        // 剛好頂到磚塊底邊所需的初速
-        const rise = (R.gy - CHAR_H()) - (brick.ty + cell*0.5) + cell*0.25;
-        R.vy = -Math.sqrt(2*G_UP()*Math.max(rise, cell*0.5));
-        puff(R.x, R.gy, 5, 0);
-        R.onGround = false;
-        R.phase = 'jump';
-        R.hit = false;
-        blip('jump');
-      }
-      continue;
+    // 工人這一幀該站的位置：由「正在處理的那塊磚」反推，再平滑追上去，
+    // 一排排往上打／一塊塊往上砌時看起來就是沿著鷹架爬升，而不是瞬移
+    const aim = workAim(R);
+    if(R.wx === undefined){ R.wx = aim.x; R.wy = aim.y; }
+    else{
+      const k = Math.min(1, dt*16);
+      R.wx += (aim.x-R.wx)*k; R.wy += (aim.y-R.wy)*k;
     }
 
-    if(R.phase==='jump'){
-      R.vy += (R.vy < 0 ? G_UP() : G_DOWN())*dt;
-      R.y  += R.vy*dt;
-      R.x  += R.vx*dt*0.35;          // 保留一點水平慣性，不是原地垂直彈跳
-      R.vx *= 0.985;
+    switch(R.phase){
+      case 'wait':
+        if(R.t >= R.delay){ R.phase = R.hasOld ? 'enterDemo' : 'enterBuild'; R.t=0; }
+        break;
 
-      const brick = lowestIn(R.d, R.cols[R.ci]);
-      if(!R.hit && brick && (R.y - CHAR_H()) <= brick.ty + cell*0.5){
-        R.hit = true;
-        R.vy = Math.abs(R.vy)*0.35;                 // 撞到就往下彈
-        smash(R.d, R.cols[R.ci]);
-      }
-      if(R.y >= R.gy){
-        R.y = R.gy; R.vy = 0; R.onGround = true;
-        R.squash = 1;                 // 落地壓扁
-        puff(R.x, R.gy, 7, 0);
-        blip('land');
-        nextCol(R, i);
-      }
+      case 'enterDemo':
+        if(R.t >= T_ENTER){ R.phase='drill'; R.t=0; R.ri=0; }
+        break;
+
+      case 'drill':
+        if(!RM){
+          shake = Math.max(shake, 0.45);   // 電鑽頂著磚塊的持續反作用力，不能只有撞擊瞬間才震
+          // 火花就從鑽頭尖端噴出來 —— 跟工人手上的那支電鑽是同一個座標
+          if(Math.random() < dt*30) spawnSpark(R.wx, R.wy);
+        }
+        if(Math.random() < dt*3) blip('drill');
+        if(R.t >= T_ROW){
+          R.t -= T_ROW;
+          if(R.ri < R.rows.length){ breakRow(R, R.rows[R.ri]); R.ri++; }
+          if(R.ri >= R.rows.length){
+            R.phase='swap'; R.t=0;
+            for(let n=0;n<5;n++) puffMortar(R.wx, R.wy + REACH() + RIG_H());
+          }
+        }
+        break;
+
+      case 'swap':
+        if(R.t >= T_SWAP){ R.phase='enterBuild'; R.t=0; }
+        break;
+
+      case 'enterBuild':
+        if(R.t >= T_ENTER){ R.phase='build'; R.t=0; R.ci=0; }
+        break;
+
+      case 'build':
+        if(R.t >= T_CELL){
+          R.t -= T_CELL;
+          if(R.ci < R.cells.length){
+            const cellPos = R.cells[R.ci];
+            placeCell(R.d, cellPos.r, cellPos.c);
+            R.ci++;
+          }
+          if(R.ci >= R.cells.length){
+            if(buildDigit(R.d, R.ch)) R.built = true;
+            R.phase='settle'; R.t=0;
+          }
+        }
+        break;
+
+      case 'settle':
+        if(R.t >= T_SETTLE){ R.phase='leave'; R.t=0; }
+        break;
+
+      case 'leave':
+        if(R.t >= T_LEAVE){ runs.splice(i,1); }
+        break;
     }
   }
 }
 
-function nextCol(R, i){
-  R.ci++;
-  if(R.ci >= R.cols.length){
-    buildDigit(R.d, R.ch, 0.12);
-    R.built = true;
-    R.phase = 'leave';
-  }else{
-    R.phase = 'run';
+// 由下往上，整排一起崩解
+function breakRow(R, r){
+  const rowBricks = bricks.filter(b => b.alive && b.d===R.d && b.r===r);
+  const isSalvage = r === R.salvageRow;
+  for(const b of rowBricks){
+    b.alive = false;
+    spawnDebris(b.x, b.y);
   }
+  if(isSalvage && rowBricks.length){
+    const cx = rowBricks.reduce((s,b) => s+b.x, 0) / rowBricks.length;
+    const cy = rowBricks[0].y;
+    for(let i=0;i<3;i++) spawnBolt(cx+(i-1)*cell*0.4, cy);
+    pops.push({x:cx, y:cy-cell*0.6, life:0.8, n:3});
+    blip('salvage');
+  }
+  shake = Math.min(1, shake+0.85);
+  blip('crumble');
 }
 
-// 由下往上依序碎掉
-function smash(d, c){
-  const col = bricks.filter(b => b.alive && b.d===d && b.c===c).sort((a,b)=>b.r-a.r);
-  col.forEach(b => { b.bounce = 1; });          // 整行先往上頂一下
-  col.forEach((b, k) => setTimeout(() => breakBrick(b, k===0), 90 + k*45));
-  shake = Math.min(1, shake + 0.7);
-}
-
-function breakBrick(b, dropCoin){
-  if(!b.alive) return;
-  b.alive = false;
-  const s = cell*0.42;
-  for(let i=0;i<4;i++){
+// ── 粒子 ────────────────────────────────────────────────────────
+function spawnDebris(x, y){
+  for(let i=0;i<3;i++){
+    const s = cell*0.32;
     shards.push({
-      x: b.x + (i%2?1:-1)*s*0.5, y: b.y + (i<2?-1:1)*s*0.5,
-      vx: (i%2?1:-1)*(0.6+Math.random())*cell*7,
-      vy: -(1.1+Math.random()*0.7)*cell*11,
-      rot: Math.random()*6.28, vr: (Math.random()-0.5)*14, s, life:1.1
+      x: x+(Math.random()-0.5)*cell*0.6, y: y+(Math.random()-0.5)*cell*0.4,
+      vx:(Math.random()-0.5)*cell*10, vy:-(0.6+Math.random()*0.8)*cell*10,
+      rot:Math.random()*6.28, vr:(Math.random()-0.5)*12, s, life:0.5+Math.random()*0.3
     });
   }
-  const n = b.gold ? 5 : (dropCoin ? 1 : 0);
-  for(let i=0;i<n;i++){
-    coins.push({x:b.x + (i-(n-1)/2)*cell*0.35, y:b.y,
-                vx:(i-(n-1)/2)*cell*2.2, vy:-cell*(19+Math.random()*5), life:0.85});
-    coinCount++;
-  }
-  if(n) pops.push({x:b.x, y:b.y - cell*0.6, life:0.8, n});
-  if(b.gold) shake = Math.min(1.4, shake + 0.5);
-  blip(b.gold ? 'gold' : 'break');
+}
+function spawnBolt(x, y){
+  bolts.push({x, y, vx:(Math.random()-0.5)*cell*3, vy:-cell*(14+Math.random()*4), life:0.8});
+  boltCount++;
+}
+function spawnSpark(x, y){
+  for(let i=0;i<4;i++)
+    sparks.push({x:x+(Math.random()-0.5)*cell*0.6, y:y+(Math.random()-0.5)*cell*0.4,
+      vx:(Math.random()-0.5)*cell*12, vy:-Math.random()*cell*8, life:0.16+Math.random()*0.12});
+}
+function puffMortar(x, y){
+  const n = RM ? 1 : 4;
+  for(let i=0;i<n;i++)
+    dust.push({x:x+(Math.random()-0.5)*cell*0.5, y:y-cell*0.1,
+      vx:(Math.random()-0.5)*cell*3, vy:-Math.random()*cell*2.4,
+      life:0.28+Math.random()*0.14, s:cell*(0.1+Math.random()*0.12)});
 }
 
 // ── 更新 ────────────────────────────────────────────────────────
 function update(dt){
+  syncPalette();                   // 純看當下小時，不快取 —— 掛整天也會自己換時段
   startChange(timeStr(), false);   // 每幀比對，卡住的數字會自己追上
   updateRuns(dt);
 
-  for(const c of clouds){ c.x += c.s*dt; if(c.x > W+cell*6) c.x = -cell*6; }
-
-  for(const b of bricks){
-    if(!b.alive) continue;
-    if(b.state==='fall'){
-      b.t += dt;
-      if(b.t < b.delay) continue;
-      b.vy += G()*0.55*dt;
-      b.y  += b.vy*dt;
-      if(b.y >= b.ty){ b.y = b.ty; b.vy = 0; b.state='idle'; b.squash = 1; blip('land'); }
-    }else if(b.squash > 0){
-      b.squash = Math.max(0, b.squash - dt*5);
-    }
-    if(b.bounce > 0) b.bounce = Math.max(0, b.bounce - dt*7);
-  }
+  for(const b of bricks) if(b.pop>0) b.pop = Math.max(0, b.pop - dt*6);
   bricks = bricks.filter(b => b.alive);
 
   for(let i=shards.length-1;i>=0;i--){
     const s=shards[i];
-    s.vy += G()*0.5*dt; s.x += s.vx*dt; s.y += s.vy*dt;
+    s.vy += cell*30*dt; s.x += s.vx*dt; s.y += s.vy*dt;
     s.rot += s.vr*dt; s.life -= dt;
     if(s.life<=0 || s.y > H+cell*3) shards.splice(i,1);
   }
-  for(let i=coins.length-1;i>=0;i--){
-    const c=coins[i];
-    c.vy += G()*0.5*dt; c.y += c.vy*dt; c.x += (c.vx||0)*dt; c.life -= dt;
-    if(c.life<=0) coins.splice(i,1);
+  for(let i=bolts.length-1;i>=0;i--){
+    const c=bolts[i];
+    c.vy += cell*22*dt; c.y += c.vy*dt; c.x += c.vx*dt; c.life -= dt;
+    if(c.life<=0) bolts.splice(i,1);
   }
   for(let i=pops.length-1;i>=0;i--){
     const q=pops[i]; q.y -= cell*2.2*dt; q.life -= dt;
@@ -524,185 +663,323 @@ function update(dt){
   }
   for(let i=dust.length-1;i>=0;i--){
     const q=dust[i];
-    q.x += q.vx*dt; q.y += q.vy*dt; q.vy += G()*0.12*dt;
-    q.vx *= 0.9; q.life -= dt;
+    q.x += q.vx*dt; q.y += q.vy*dt; q.vy += cell*8*dt; q.vx *= 0.9; q.life -= dt;
     if(q.life<=0) dust.splice(i,1);
+  }
+  for(let i=sparks.length-1;i>=0;i--){
+    const q=sparks[i];
+    q.x += q.vx*dt; q.y += q.vy*dt; q.vy += cell*14*dt; q.life -= dt;
+    if(q.life<=0) sparks.splice(i,1);
   }
   shake = Math.max(0, shake - dt*4.5);
 }
 
 // ── 繪製 ────────────────────────────────────────────────────────
+// 每張點陣圖只在第一次用到時拆成「同色的水平長條」，之後每幀照著填就好。
+// 一塊 8x8 的磚本來要 64 次 fillRect＋64 次字串索引，拆完只剩 24 條、同色還連在一起，
+// 畫出來的像素完全一樣，但整支 draw() 的呼叫次數掉到三分之一。
+// 長條裡存的是點陣圖上的字母而不是色碼，色碼要畫的時候才查 ——
+// 這樣時段換色只要改 COL_* 物件就好，不必把快取整個丟掉重算。
+const _ops = new Map();
+function opsOf(map, order){
+  let o = _ops.get(map);
+  if(o) return o;
+  o = [];
+  const w = map[0].length;
+  for(let r=0;r<map.length;r++){
+    const row = map[r];
+    let c = 0;
+    while(c < w){
+      const ch = row[c];
+      if(ch === '.'){ c++; continue; }
+      let e = c+1;
+      while(e < w && row[e] === ch) e++;
+      o.push({k:ch, x:c, y:r, w:e-c});
+      c = e;
+    }
+  }
+  o.sort((a,b) => order.indexOf(a.k) - order.indexOf(b.k));   // 同色排在一起，少切 fillStyle
+  _ops.set(map, o);
+  return o;
+}
+
 function sprite(map, cx, cy, px, colors, alpha, rot, sx, sy){
+  const ops = opsOf(map, colors.ORDER);
+  const kx = px*(sx ?? 1), ky = px*(sy ?? 1);
+  const ox = -kx*map[0].length/2, oy = -ky*map.length/2;
+  const ph = Math.max(1, Math.ceil(ky));
   ctx.save();
   ctx.globalAlpha = alpha ?? 1;
-  ctx.translate(cx, cy);
+  ctx.translate(Math.round(cx), Math.round(cy));
   if(rot) ctx.rotate(rot);
-  if(sx || sy) ctx.scale(sx ?? 1, sy ?? 1);
-  const w = map[0].length, h = map.length;
-  const ox = -px*w/2, oy = -px*h/2;
-  for(let r=0;r<h;r++){
-    const row = map[r];
-    for(let c=0;c<w;c++){
-      const ch = row[c];
-      if(ch==='.') continue;
-      ctx.fillStyle = colors[ch];
-      ctx.fillRect(Math.round(ox+c*px), Math.round(oy+r*px), Math.ceil(px), Math.ceil(px));
-    }
+  let cur = '';
+  for(let i=0;i<ops.length;i++){
+    const o = ops[i];
+    if(o.k !== cur) ctx.fillStyle = colors[cur = o.k];
+    const x0 = Math.round(ox + o.x*kx);
+    ctx.fillRect(x0, Math.round(oy + o.y*ky), Math.max(1, Math.round(ox + (o.x+o.w)*kx) - x0), ph);
   }
   ctx.restore();
 }
 
 function drawBackground(){
-  const g = ctx.createLinearGradient(0,0,0,H);
-  // 數字大約落在畫面 26%~61% 的高度，那一段刻意拉到最亮，
-  // 讓深色輪廓跟天空的對比最大化 —— 讀出形狀靠的是輪廓不是磚面
-  g.addColorStop(0,    '#6fa8dc');
-  g.addColorStop(0.26, '#c2e4f7');
-  g.addColorStop(0.62, '#e3f2fb');
-  g.addColorStop(1,    '#bcdcf0');
-  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  // NES 畫不出漸層：天空改成三段硬邊色帶，數字所在的中段刻意最亮
+  const b1 = Math.round(H*0.28), b2 = Math.round(H*0.64);
+  ctx.fillStyle = PAL.skyHi;  ctx.fillRect(0, 0, W, b1);
+  ctx.fillStyle = PAL.skyMid; ctx.fillRect(0, b1, W, b2-b1);
+  ctx.fillStyle = PAL.skyLo;  ctx.fillRect(0, b2, W, H-b2);
 
-  const horizon = ledgeY(ROWS[ROWS.length-1]);
+  const horizon = ledgeY(floorRow());
 
-  // 遠山：兩層，帶輪廓
-  if(SHOW.hills){
-  const hill = (yBase, h, step, fill, edge) => {
+  if(SHOW.cranes){
+    ctx.strokeStyle = PAL.edge; ctx.fillStyle = PAL.edge;
+    ctx.lineWidth = Math.max(2, cell*0.1);
+    const step = cell*16;
     for(let i=-1; i*step < W+step; i++){
-      const cx = i*step + step*0.45;
+      const cx = i*step + step*0.32;
+      const mastH = cell*7;
+      ctx.fillStyle = PAL.edge;   // 每輪迴圈重設，避免被下面警示燈的藍色污染到下一座塔
+      ctx.fillRect(Math.round(cx-cell*0.12), Math.round(horizon-mastH), Math.round(cell*0.24), Math.round(mastH));
       ctx.beginPath();
-      ctx.moveTo(cx-h, yBase);
-      ctx.quadraticCurveTo(cx, yBase-h*1.15, cx+h, yBase);
-      ctx.closePath();
-      ctx.fillStyle = fill; ctx.fill();
-      ctx.lineWidth = Math.max(2, cell*0.09); ctx.strokeStyle = edge; ctx.stroke();
+      ctx.moveTo(cx-cell*3.0, horizon-mastH+cell*0.3);
+      ctx.lineTo(cx+cell*1.6, horizon-mastH+cell*0.3);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx-cell*2.2, horizon-mastH+cell*0.3);
+      ctx.lineTo(cx-cell*2.2, horizon-mastH+cell*1.5);
+      ctx.stroke();
+      // 警示燈：塔頂閃爍的工程藍方塊，藍色只用在機具／人造物上
+      // 夜間常亮（而且大一號），暗底上這顆藍點就是工地還在運轉的訊號
+      if(PAL.lamp || (!RM && Math.floor(time*2)%2===0)){
+        ctx.fillStyle = PAL.accent;
+        const ls = Math.max(2, Math.round(cell*(PAL.lamp ? 0.26 : 0.16)));
+        ctx.fillRect(Math.round(cx-ls/2), Math.round(horizon-mastH-ls), ls, ls);
+      }
     }
-  };
-  hill(horizon, cell*5.0, cell*13, '#3f8f52', '#241006');
-  hill(horizon, cell*3.2, cell*8.5, '#57ab63', '#241006');
   }
 
-  // 灌木叢，貼在地平線上
-  if(SHOW.bushes){
-  ctx.fillStyle = '#2f7a42';
-  ctx.strokeStyle = '#241006'; ctx.lineWidth = Math.max(2, cell*0.09);
-  for(let i=0; i*cell*9 < W+cell*9; i++){
-    const cx = i*cell*9 + cell*3.5, r = cell*1.05;
+  if(SHOW.fence){
+    ctx.strokeStyle = PAL.edge; ctx.lineWidth = Math.max(1, cell*0.05);
+    const fy = horizon - cell*1.5, fh = cell*1.1, step = cell*0.9;
     ctx.beginPath();
-    ctx.arc(cx-r*0.9, horizon, r*0.8, Math.PI, 0);
-    ctx.arc(cx,       horizon, r,     Math.PI, 0);
-    ctx.arc(cx+r*0.9, horizon, r*0.8, Math.PI, 0);
-    ctx.closePath(); ctx.fill(); ctx.stroke();
-  }
-  }
-
-  // 雲：預設關閉，見上方 SHOW
-  for(const c of clouds){
-    const u = cell*c.k;
-    const parts = [[-1.4,-0.4,1.6,1.0],[0,-0.9,2.4,1.5],[1.5,-0.5,1.7,1.1],[-0.6,0.2,3.0,0.9]];
-    ctx.fillStyle = '#f2f7fb'; ctx.strokeStyle = '#241006';
-    ctx.lineWidth = Math.max(2, cell*0.085);
-    parts.forEach(([dx,dy,rw,rh]) => {
-      const x = Math.round(c.x+dx*u), y = Math.round(c.y+dy*u);
-      const w = Math.round(rw*u), h = Math.round(rh*u);
-      ctx.fillRect(x,y,w,h); ctx.strokeRect(x,y,w,h);
-    });
+    for(let x=-cell; x<W+cell; x+=step){
+      ctx.moveTo(x, fy); ctx.lineTo(x+step, fy+fh);
+      ctx.moveTo(x, fy+fh); ctx.lineTo(x+step, fy);
+    }
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, fy); ctx.lineTo(W, fy);
+    ctx.moveTo(0, fy+fh); ctx.lineTo(W, fy+fh);
+    ctx.stroke();
   }
 }
 
-function drawLedges(){
+// 夜間工地照明。光暈不用半透明也不用漸層 —— 就是燈頭下方一塊固定形狀的亮色區塊，
+// 三階硬邊往下擴出去，再在地面補一道被照亮的鋪面。這是 NES 表現光的方式。
+function drawLamps(gy){
+  const step = Math.max(cell*9, W/4), poleH = cell*1.9;
+  const wid = [cell*0.42, cell*0.8, cell*1.25, cell*1.8], seg = poleH/wid.length;
+  const lw = Math.max(1, Math.round(cell*0.05));
+  for(let i=0; i*step < W+step; i++){
+    const x = Math.round(i*step + step*0.55);
+    const top = Math.round(gy - poleH);
+    for(let s=0;s<wid.length;s++){
+      const w = Math.round(wid[s]);
+      ctx.fillStyle = PAL.lamp[s ? 1 : 0];
+      ctx.fillRect(x-(w>>1), Math.round(top + s*seg), w, Math.ceil(seg));
+    }
+    ctx.fillStyle = PAL.edge;                          // 燈桿在光裡是一道暗線
+    ctx.fillRect(x-(lw>>1), top, lw, Math.round(gy)-top);
+    ctx.fillStyle = OUT;                               // 燈頭
+    ctx.fillRect(x-Math.round(cell*0.3), top-Math.round(cell*0.34), Math.round(cell*0.6), Math.round(cell*0.34));
+    ctx.fillStyle = PAL.lamp[0];
+    ctx.fillRect(x-Math.round(cell*0.2), top-Math.round(cell*0.2), Math.round(cell*0.4), Math.round(cell*0.2));
+  }
+}
+
+function drawGround(){
   const gp = cell*0.94/8;
   for(const row of ROWS){
     const y = ledgeY(row);
-    const isFloor = row === ROWS[ROWS.length-1];
+    const isFloor = row === floorRow();
     if(isFloor){
-      // 真正的地面才鋪整排地磚
+      if(PAL.lamp) drawLamps(y);
       for(let x = -cell; x < W + cell; x += cell)
-        sprite(GROUND, x + cell*0.5, y + cell*0.5, gp, C_GROUND, 1);
+        sprite(GROUND_MAP, x + cell*0.5, y + cell*0.5, gp, COL_GROUND, 1);
+      if(PAL.lamp){
+        const step = Math.max(cell*9, W/4), pw = Math.round(cell*1.7);
+        ctx.fillStyle = PAL.lamp[1];
+        for(let i=0; i*step < W+step; i++)
+          ctx.fillRect(Math.round(i*step+step*0.55)-(pw>>1), Math.round(y+cell*0.12),
+                       pw, Math.max(2, Math.round(cell*0.2)));
+      }
     }else{
-      // 直式版面上層那條是浮空平台，畫成薄板，避免被看成一排方塊
-      ctx.fillStyle = '#6a6558';
+      ctx.fillStyle = PAL.post;
       ctx.fillRect(0, y + cell*0.28, W, cell*0.44);
-      ctx.fillStyle = '#9a8f7a';
+      ctx.fillStyle = PAL.plank;
       ctx.fillRect(0, y + cell*0.28, W, cell*0.14);
       ctx.fillStyle = OUT;
       ctx.fillRect(0, y + cell*0.24, W, Math.max(2, cell*0.07));
       ctx.fillRect(0, y + cell*0.72, W, Math.max(2, cell*0.07));
     }
     if(isFloor){
-      ctx.fillStyle = '#4f4c42';
+      ctx.fillStyle = PAL.soil;
       ctx.fillRect(0, y + cell, W, H - (y + cell));
-      ctx.fillStyle = '#413f36';
+      ctx.fillStyle = PAL.soil2;
       for(let x = 0; x < W; x += cell*2)
         ctx.fillRect(x, y + cell, cell, H - (y + cell));
     }
   }
 }
 
+// 電鑽頂點的衝擊效果：震動放射線＋粉塵雲，每一幀都畫（不是機率觸發），
+// 這樣不管截到哪一幀凍結畫面，都看得出「正在打」
+function drawImpact(x, y){
+  const n = 6, len = cell*(0.55 + 0.18*Math.abs(Math.sin(time*30)));
+  ctx.strokeStyle = OUT; ctx.lineWidth = Math.max(2, Math.round(cell*0.09));
+  ctx.beginPath();
+  for(let i=0;i<n;i++){
+    const a = (i/n)*Math.PI*2 + time*2.4;
+    const x0 = Math.round(x+Math.cos(a)*cell*0.32), y0 = Math.round(y+Math.sin(a)*cell*0.32);
+    const x1 = Math.round(x+Math.cos(a)*(cell*0.32+len)), y1 = Math.round(y+Math.sin(a)*(cell*0.32+len));
+    ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+  }
+  ctx.stroke();
+
+  ctx.fillStyle = PAL.haze;
+  const dn = 5, ds = Math.max(2, Math.round(cell*0.3));
+  for(let i=0;i<dn;i++){
+    const a = (i/dn)*Math.PI*2 + time*1.6;
+    const dx = Math.round(x+Math.cos(a)*cell*0.6), dy = Math.round(y+Math.sin(a)*cell*0.4 - cell*0.2);
+    ctx.fillRect(dx-ds/2, dy-ds/2, ds, ds);
+  }
+}
+
+// 工人腳下的鷹架：一塊踏板加兩根立柱，一路撐到地面。
+// 畫在磚塊之前，立柱才會在數字後面，不會把還沒拆到的磚遮掉
+function drawRig(x, footY, groundY){
+  const top = Math.round(footY), gnd = Math.round(groundY);
+  if(top > gnd - cell*0.5) return;
+  const hw = Math.max(4, Math.round(cell*1.15)), lw = Math.max(2, Math.round(cell*0.11));
+  const pt = Math.max(3, Math.round(cell*0.18)), cxr = Math.round(x);
+  ctx.fillStyle = PAL.post;
+  ctx.fillRect(cxr-hw, top+pt, lw, gnd-top-pt);
+  ctx.fillRect(cxr+hw-lw, top+pt, lw, gnd-top-pt);
+  ctx.fillStyle = PAL.plank;
+  ctx.fillRect(cxr-hw-lw, top, hw*2+lw*2, pt);
+  ctx.fillStyle = OUT;
+  ctx.fillRect(cxr-hw-lw, top+pt, hw*2+lw*2, Math.max(2, Math.round(cell*0.06)));
+}
+
+// 工人（連同手上的工具）這一幀的水平位置。直式版面左右幾乎沒有餘裕，
+// 人寧可貼著數字也不能被畫布切掉，所以夾進畫面；工具跟著手一起移，
+// 人與工具永遠是同一個剛體。鷹架也用同一個值算，柱子才不會跟腳分家。
+function workerAt(R){
+  const isDemo = R.phase==='enterDemo' || R.phase==='drill' || R.phase==='swap';
+  const map = isDemo ? DEMO_BODY : BUILD_BODY;
+  const cols = map[0].length, px = RIG_H()/map.length;
+  const off = ((isDemo?DEMO_HAND:BUILD_HAND) + 0.5 - cols/2)*px, half = cols*px/2;
+  return { isDemo, map, px, off,
+           cx: Math.min(W-2-half, Math.max(2+half, R.wx - off)) };
+}
+
+// 工地邊上那位一直都在的工頭：沒在施工的時候，畫面上也還是看得到人
+function drawForeman(){
+  const gnd = ledgeY(floorRow());
+  const h = RIG_H(), px = h/IDLE_BODY.length;
+  const x = Math.max(cell*2.6, originX*0.55);
+  const bob = (!RM && Math.floor(time*1.6)%2) ? Math.max(1, cell*0.06) : 0;
+  sprite(IDLE_BODY, x, gnd - h/2 - bob, px, COL_IDLE, 1);
+  sprite(CART_MAP, x + cell*1.9, gnd - cell*0.42, cell*0.17, COL_CART, 1);
+}
+
 function draw(){
   ctx.save();
-  if(shake > 0.01){
-    const a = shake * cell * 0.22;
+  if(shake > 0.01 && !RM){
+    const a = shake * cell * 0.2;
     ctx.translate((Math.random()-0.5)*a, (Math.random()-0.5)*a);
   }
 
   drawBackground();
-  drawLedges();
+  drawGround();
+
+  for(const R of runs){
+    if(R.phase==='drill' || R.phase==='swap' || R.phase==='build' || R.phase==='settle')
+      drawRig(workerAt(R).cx, R.wy + REACH() + RIG_H(), ledgeY(floorRow()));
+  }
+  drawForeman();
 
   const bp = cell*0.94/8;
   for(const b of bricks){
-    if(b.state==='fall' && b.t < b.delay) continue;
-    const q = b.squash;
-    sprite(b.gold ? GOLD : BRICK, b.x, b.y + q*cell*0.12 - b.bounce*cell*0.32, bp,
-           b.gold ? C_GOLD : C_BRICK, 1, 0, 1+q*0.22, 1-q*0.22);
+    const pop = b.pop || 0;
+    sprite(BRICK_MAP, b.x, b.y - pop*cell*0.1, bp, COL_BRICK, 1, 0, 1+pop*0.18, 1-pop*0.18);
   }
 
   for(const s of shards){
     ctx.save();
-    ctx.globalAlpha = Math.min(1, s.life);
-    ctx.translate(s.x, s.y); ctx.rotate(s.rot);
-    ctx.fillStyle = C_BRICK.O; ctx.fillRect(-s.s/2, -s.s/2, s.s, s.s);
-    ctx.fillStyle = C_BRICK.H; ctx.fillRect(-s.s/2, -s.s/2, s.s, Math.max(1,s.s*0.3));
-    ctx.strokeStyle = OUT; ctx.lineWidth = Math.max(1, s.s*0.14);
+    ctx.globalAlpha = Math.min(1, s.life*2);
+    ctx.translate(Math.round(s.x), Math.round(s.y)); ctx.rotate(s.rot);
+    ctx.fillStyle = PAL.shard; ctx.fillRect(-s.s/2, -s.s/2, s.s, s.s);
+    ctx.strokeStyle = OUT; ctx.lineWidth = Math.max(1, s.s*0.16);
     ctx.strokeRect(-s.s/2, -s.s/2, s.s, s.s);
     ctx.restore();
   }
 
-  const cp = cell*0.62/8;
-  for(const c of coins)
-    sprite(COIN, c.x, c.y, cp, C_COIN, Math.min(1, c.life*2), 0,
-           Math.cos(time*13)*0.9 + 0.1, 1);
+  const kp = cell*0.6/8;
+  for(const c of bolts)
+    sprite(BOLT_MAP, c.x, c.y, kp, COL_BOLT, Math.min(1, c.life*2));
 
-  // 敲出金幣時的 +N
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `${Math.round(cell*0.62)}px Silkscreen, monospace`;
+  ctx.font = `${Math.round(cell*0.6)}px Silkscreen, monospace`;
   for(const q of pops){
     ctx.globalAlpha = Math.min(1, q.life*1.6);
     ctx.lineWidth = Math.max(3, cell*0.14); ctx.strokeStyle = OUT;
     ctx.strokeText('+'+q.n, q.x, q.y);
-    ctx.fillStyle = '#ffd85a'; ctx.fillText('+'+q.n, q.x, q.y);
+    ctx.fillStyle = PAL.accent; ctx.fillText('+'+q.n, q.x, q.y);
   }
   ctx.globalAlpha = 1;
 
-  // 塵土畫在角色後面
   for(const q of dust){
-    ctx.globalAlpha = Math.min(0.75, q.life/q.max);
-    ctx.fillStyle = '#d8d2c4';
+    ctx.globalAlpha = Math.min(0.8, q.life*3);
+    ctx.fillStyle = PAL.dust;
     ctx.fillRect(q.x-q.s/2, q.y-q.s/2, q.s, q.s);
   }
+  for(const q of sparks){
+    ctx.globalAlpha = Math.min(1, q.life*6);
+    ctx.fillStyle = PAL.spark;
+    const s = cell*0.24;
+    ctx.fillRect(q.x-s/2, q.y-s/2, s, s);
+  }
   ctx.globalAlpha = 1;
 
-  const px = CHAR_H()/16;
+  // 工人掛在「他正在處理的那塊磚」底下：R.wx/R.wy 就是工具尖端要頂住的點，
+  // 手接在尖端下方 REACH，身體再從手往下長，腳底自然落在鷹架踏板上。
+  // 拆除組 13x12 矮胖蹲姿、砌造組 11x14 瘦高站姿，光看剪影就分得出來。
   for(const R of runs){
     if(R.phase==='wait') continue;
-    const legs = !R.onGround ? LEGS.jump
-               : R.skid ? LEGS.skid
-               : (R.phase==='run' || R.phase==='leave')
-                 ? (Math.floor(R.step)%2 ? LEGS.run : LEGS.stand)
-                 : LEGS.stand;
-    const q  = R.squash || 0;
-    const sy = 1 - q*0.26, sx = (1 + q*0.26) * (R.face < 0 ? -1 : 1);
-    const h  = CHAR_H()*sy;
-    sprite(BODY.concat(legs), R.x, R.y - h/2, px, CREW[R.crew], 1, 0, sx, sy);
+    const {isDemo, map, px, off, cx:cx0} = workerAt(R);
+    const rows = map.length;
+    const moving = R.phase==='enterDemo' || R.phase==='enterBuild' || R.phase==='leave';
+    const jitter = (!RM && R.phase==='drill') ? Math.sin(time*40 + R.delay*9)*cell*0.06 : 0;
+    const bob = (!RM && moving) ? Math.abs(Math.sin(R.t*16))*cell*0.07 : 0;
+    const cx = (moving ? runX(R) - off : cx0) + jitter;
+    const tipX = cx + off;
+    const tipY = R.wy;
+    const footY = tipY + REACH() + RIG_H() - bob;
+    const handY = footY - (rows-0.5)*px;
+
+    if(isDemo)   // 先畫電鑽，等一下的手才會蓋在鑽桿上，看起來是握住中段
+      sprite(TOOL_DRILL, tipX, tipY + DRILL_L()/2, DRILL_L()/TOOL_DRILL.length, COL_TOOL, 1);
+    else if(R.phase!=='leave')   // 手上那塊還沒砌上去的磚
+      sprite(BRICK_MAP, tipX, (tipY+handY)/2, cell*0.8/8, COL_BRICK, 1);
+
+    sprite(map, cx, footY - rows*px/2, px, isDemo ? COL_DEMO : COL_BUILD, 1);
+
+    if(R.phase==='drill') drawImpact(tipX, tipY);
+    if(!isDemo){
+      const side = tipX > W/2 ? -1 : 1;
+      sprite(CART_MAP, cx + side*cell*1.5, footY - cell*0.42, cell*0.17, COL_CART, 1);
+    }
   }
 
   ctx.restore();
@@ -724,10 +1001,10 @@ function tone(freq, dur, type, vol, slideTo){
   }catch(_){}
 }
 function blip(kind){
-  if(kind==='jump')  tone(340, 0.11, 'square', 0.035, 720);
-  if(kind==='break') tone(180, 0.09, 'square', 0.04, 70);
-  if(kind==='land')  tone(150, 0.05, 'triangle', 0.03);
-  if(kind==='gold'){ tone(880, 0.07, 'square', 0.04); setTimeout(()=>tone(1320, 0.16, 'square', 0.035), 70); }
+  if(kind==='drill')   tone(90, 0.05, 'square', 0.025, 70);
+  if(kind==='crumble') tone(140, 0.08, 'square', 0.035, 55);
+  if(kind==='place')   tone(520, 0.05, 'triangle', 0.03, 700);
+  if(kind==='salvage'){ tone(660, 0.06, 'square', 0.035); setTimeout(()=>tone(990, 0.12, 'square', 0.03), 60); }
 }
 
 // ── HUD ─────────────────────────────────────────────────────────
@@ -736,7 +1013,7 @@ const elDate=document.getElementById('date');
 const elFill=document.getElementById('fill');
 function hud(){
   const d=new Date();
-  elCoins.textContent = '×' + String(coinCount).padStart(2,'0');
+  elCoins.textContent = '×' + String(boltCount).padStart(2,'0');
   elDate.textContent = `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
   elFill.style.width = ((d.getSeconds()+d.getMilliseconds()/1000)/60*100).toFixed(1)+'%';
 }
@@ -747,9 +1024,9 @@ const bFmt=document.getElementById('bFmt'), bSnd=document.getElementById('bSnd')
       bInstall=document.getElementById('bInstall');
 
 document.getElementById('bTest').onclick = () => startChange(timeStr(), true);
-bFmt.onclick = () => { h24=!h24; bFmt.textContent=h24?'24 小時':'12 小時';
+bFmt.onclick = () => { h24=!h24; bFmt.textContent=h24?'24H':'12H';
   bFmt.setAttribute('aria-pressed', String(h24)); startChange(timeStr(), true); };
-bSnd.onclick = () => { sound=!sound; bSnd.setAttribute('aria-pressed', String(sound)); if(sound) blip('jump'); };
+bSnd.onclick = () => { sound=!sound; bSnd.setAttribute('aria-pressed', String(sound)); if(sound) blip('place'); };
 bFull.onclick = () => {
   const s=document.getElementById('stage');
   if(document.fullscreenElement) document.exitFullscreen(); else s.requestFullscreen?.();
@@ -808,7 +1085,7 @@ if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http'
 // ── 啟動 ────────────────────────────────────────────────────────
 layout();
 want = timeStr().split('');
-for(let d=0; d<4; d++) buildDigit(d, want[d], 0.15 + d*0.12);
+for(let d=0; d<4; d++){ if(buildDigit(d, want[d])) placeAllCells(d, want[d]); }
 hud(); setInterval(hud, 100);
 
 let last=performance.now();

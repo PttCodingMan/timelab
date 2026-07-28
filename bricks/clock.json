@@ -1,10 +1,10 @@
 {
   "id": "bricks",
-  "name": "敲磚時鐘",
-  "tagline": "數字是磚塊。分鐘一變，師傅跑過來從下面把它頂碎，新的磚塊再從天上掉下來",
+  "name": "工地時鐘",
+  "tagline": "數字是水泥磚。分鐘一變，拆除工人先用電鑽把舊磚打掉，砌造工人再把新磚一塊一塊砌回來",
   "created": "2026-07-27",
-  "tags": ["platformer", "canvas", "pwa"],
-  "accent": "#d9763a",
+  "tags": ["construction", "canvas", "pwa"],
+  "accent": "#3cbcfc",
   "shot": {
     "width": 1200,
     "height": 750,
