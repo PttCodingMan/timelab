@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>枯山水時鐘</title>
+<meta name="description" content="沙上的耙痕就是數字，換分鐘時耙子走過，抹平舊的、耙出新的。">
+<meta name="theme-color" content="#ddd6c3">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="枯山水時鐘">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<style>
+  :root{
+    --sand:#ddd6c3;
+    --ink:#6b6255;
+    --line:#c4b9a2;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--sand);overflow:hidden;overscroll-behavior:none}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif;
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #stage{position:fixed;inset:0;background:var(--sand)}
+  canvas{display:block;width:100%;height:100%}
+
+  #ctrl{
+    position:fixed; right:max(16px, env(safe-area-inset-right));
+    bottom:max(16px, env(safe-area-inset-bottom));
+    display:flex; gap:8px;
+    transition:opacity 1.2s ease;
+  }
+  button{
+    font:inherit; font-size:12px; letter-spacing:.08em;
+    color:var(--ink); background:transparent; border:1px solid var(--line);
+    padding:8px 12px; border-radius:2px; cursor:pointer; touch-action:manipulation;
+  }
+  button:hover{ background:var(--line); }
+  button:focus-visible{ outline:2px solid var(--ink); outline-offset:2px; }
+  button[aria-pressed="true"]{ border-color:var(--ink); }
+  button[hidden]{ display:none; }
+  body.rest #ctrl{ opacity:0; pointer-events:none; }
+  /* ?embed=1 — 在展示頁的 iframe 裡預覽時只留錶面 */
+  body.embed #ctrl{ display:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+</div>
+<div id="ctrl">
+  <button id="bInstall" hidden>安裝</button>
+  <button id="bWake" aria-pressed="false">防休眠</button>
+  <button id="bFull">全螢幕</button>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ── 色票：淺沙底、溝的暗壁、被推起的沙脊、木耙 ────────────────────
+const SAND   = '#ddd6c3';
+const SHADE  = '146,133,109';   // 淺一階的陰影：大範圍明暗、沙脊的背光側
+const GROOVE = '116,104,82';    // 溝底的影。反差來自「整片平沙 vs 整塊條紋」，
+                                // 不必再為了遠看把溝壓黑
+const LIT    = '255,253,247';
+const WOOD   = '#8a7355';
+const WOOD_D = '#665441';
+// 光源釘死在左上：全畫面每一道溝的暗壁都在迎光側、沙脊在背光側
+const LX = -0.707, LY = -0.707;
+
+// 數字是自己畫的筆畫，不用系統字體：縮圖在 Linux 上截，手寫字體會 fallback
+// 成別的字，看到的就跟展示頁對不起來。AW/DH 是一格字的寬高（乘 F），
+// CW 是冒號那格的寬，版面照這三個比例算。
+const AW = 0.56, DH = 0.71, CW = 0.30;
+
+const TILT = 0.012;       // 整片沙略帶斜度
+// 抹平 + 耙出新字的總長務必 < 3 秒：tools/simulate.js 最緊的一次會在
+// 分鐘跳完後第 3 秒就查 dataset.shown，動畫沒收完那次就算沒過。
+const T_ERASE = 1.0;      // 抹平
+const T_DRAW  = 1.5;      // 耙出新字
+
+// 固定種子的偽亂數：末端偏移每幀都要算出同一個值，否則會出現鬼影
+const hash = n => { const s = Math.sin(n * 127.1) * 43758.5453; return s - Math.floor(s); };
+const jit = n => hash(n) - 0.5;
+const smooth = t => t*t*(3-2*t);
+
+// 圈的顏色先跟沙底混好再畫：沿輪廓的圈是一圈蓋一圈的，用半透明疊會越往內越髒
+const SANDV = [221,214,195];    // = SAND
+const mix = (rgb, k) => 'rgb(' + rgb.split(',')
+  .map((v,i) => Math.round(SANDV[i] + (v - SANDV[i])*k)).join(',') + ')';
+
+// ── 版面 ────────────────────────────────────────────────────────
+let W=0, H=0, dpr=1, F=0, boxes=[], colon=null, base=null, grain=null;
+let gstep=0;                                // 字形內部兩道溝的間距
+// 字形遮罩與合成用的離屏，尺寸就是一位數字的格子，所有字共用；sprites 存合成好的字
+let mcv=null, mc=null, tcv=null, tc=null, gpT=null, SW=0, SH=0, sprites=[];
+const q = n => Math.round(n*dpr)/dpr;       // 對齊裝置像素，離屏貼回來才不糊
+
+function layout(){
+  W = cv.clientWidth || 1; H = cv.clientHeight || 1;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  const stack = (W/H) < 1.1;
+  const g = 0.12, GY = 0.62;                // 字距、直式兩列之間（冒號住這裡）
+  F = stack ? Math.min(W*0.80/(AW*2+g), H*0.66/(DH*2+GY))
+            : Math.min(W*0.82/(AW*4+CW+g*4), H*0.62/DH);
+  const bw = AW*F, bh = DH*F, t = F*0.10;
+  gstep = Math.max(2.5, F*0.013);           // 沿輪廓的圈距：半個筆畫厚度容得下四五圈
+  SW = Math.round((bw+t*2)*dpr)/dpr; SH = Math.round((bh+t*2)*dpr)/dpr;
+  boxes = [];
+  const put = (x,y) => boxes.push({x, y, w:bw, h:bh, t});
+
+  if(stack){
+    const x = (W - (2*bw + g*F))/2, y = (H - (2*bh + GY*F))/2, dx = bw + g*F;
+    put(x, y); put(x+dx, y); put(x, y + bh + GY*F); put(x+dx, y + bh + GY*F);
+    colon = { x: W/2, y: y + bh + GY*F/2, rot: true };
+  }else{
+    let x = (W - (4*bw + CW*F + 4*g*F))/2;
+    const y = (H - bh)/2;
+    put(x, y); x += bw + g*F; put(x, y); x += bw + g*F;
+    colon = { x: x + CW*F/2, y: y + bh - F*0.26, rot: false };
+    x += CW*F + g*F;
+    put(x, y); x += bw + g*F; put(x, y);
+  }
+
+  sprites = []; polys = {};
+  mcv = off(SW, SH); mc = mcv && mcv.getContext('2d');
+  tcv = off(SW, SH); tc = tcv && tcv.getContext('2d');
+  if(mc){ mc.lineCap = 'round'; mc.lineJoin = 'round'; }
+  if(tc){
+    tc.lineCap = 'round'; tc.lineJoin = 'round';
+    gpT = grainTile() ? tc.createPattern(grain, 'repeat') : null;
+  }
+  buildBase();
+}
+
+// 離屏畫布。模擬環境的假 canvas 沒有 getContext，拿不到就整條路徑跳過
+function off(w, h){
+  const o = document.createElement('canvas');
+  if(!o.getContext) return null;
+  o.width = Math.max(1, Math.round(w*dpr)); o.height = Math.max(1, Math.round(h*dpr));
+  return o;
+}
+
+// ── 顆粒 ────────────────────────────────────────────────────────
+// 一小塊 tile 當 pattern：鋪底沙、也沿著溝再刷一層。顆粒只算這一次，
+// 每幀重算會整片抖動。
+function grainTile(){
+  if(grain !== null) return grain;
+  const t = document.createElement('canvas');
+  if(!t.getContext){ grain = false; return grain; }   // 模擬環境沒有離屏 canvas
+  const S = 160;
+  t.width = t.height = S;
+  const g = t.getContext('2d');
+  for(let i=0;i<S*S*0.42;i++){
+    g.fillStyle = Math.random() < 0.55
+      ? 'rgba(128,116,94,' + (0.05 + Math.random()*0.18) + ')'
+      : 'rgba(255,253,247,' + (0.05 + Math.random()*0.26) + ')';
+    const px = Math.random() < 0.16 ? 2 : 1;   // 偶爾來顆大一點的，才不是均勻的紙纖維
+    g.fillRect(Math.floor(Math.random()*S), Math.floor(Math.random()*S), px, px);
+  }
+  grain = t;
+  return t;
+}
+
+// 沙床本身不平：一片很淡的大範圍明暗，光還是從左上來
+function vgrad(c){
+  const g = c.createRadialGradient(W*0.28, H*0.22, 0, W*0.28, H*0.22, Math.max(W,H)*0.95);
+  g.addColorStop(0, 'rgba(' + LIT + ',.34)');
+  g.addColorStop(0.55, 'rgba(' + LIT + ',.06)');
+  g.addColorStop(1, 'rgba(' + SHADE + ',.13)');
+  return g;
+}
+
+// 平沙：底沙 + 兩層錯開的顆粒 + 大範圍明暗。整幅就這一種底
+function sandFill(c, gp, vg, x, y, w, h){
+  c.fillStyle = SAND; c.fillRect(x,y,w,h);
+  if(gp){
+    // 鋪兩次、位置錯開，免得看得出 tile 在重複
+    c.fillStyle = gp; c.fillRect(x,y,w,h);
+    c.save(); c.globalAlpha = 0.72; c.translate(53,89);
+    c.fillStyle = gp; c.fillRect(x-53,y-89,w,h); c.restore();
+  }
+  c.fillStyle = vg; c.fillRect(x,y,w,h);
+}
+
+// ── 靜態底：一整片被耙背推平的沙，沒有一道溝。只畫一次 ──────────────
+function buildBase(){
+  const o = base = off(W, H);
+  if(!o) return;
+  const b = o.getContext('2d');
+  b.setTransform(dpr,0,0,dpr,0,0);
+  b.lineCap = 'round'; b.lineJoin = 'round';
+  sandFill(b, grainTile() ? b.createPattern(grain, 'repeat') : null, vgrad(b), 0, 0, W, H);
+  // 耙背推過去留下的痕：很寬、很淡、糊成一片，只有明暗沒有溝
+  b.filter = 'blur(' + (H*0.022) + 'px)';
+  for(let i=0, y=-H*0.15; y < H*1.15; i++, y += H*(0.12 + hash(i*7+3)*0.09)){
+    b.beginPath();
+    for(let x=-60; x<=W+60; x+=60) b.lineTo(x, y + x*TILT + Math.sin(x*0.0015 + i)*H*0.02);
+    b.strokeStyle = i%2 ? 'rgba(' + LIT + ',.05)' : 'rgba(' + SHADE + ',.04)';
+    b.lineWidth = H*(0.05 + hash(i*11)*0.05);
+    b.stroke();
+  }
+  b.filter = 'none';
+}
+
+function line(x1,y1,x2,y2,col,w){
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+  ctx.strokeStyle = col; ctx.lineWidth = w; ctx.stroke();
+}
+
+// ── 手寫數字 ────────────────────────────────────────────────────
+// 十個數字各 1–3 筆，每筆是一條三次貝茲鏈：頭兩個數是起點，之後每六個數
+// 接一段（c1, c2, 終點），座標在 0..1 的字格裡（x 往右、y 往下，1 = 基線）。
+// 刻意左右不對稱、收筆不回到起點，0 跟 8 在起筆處看得出接縫。
+const PATHS = {
+ '0':[[0.55,0.06, 0.31,0.05,0.14,0.24,0.14,0.50, 0.14,0.78,0.29,0.97,0.49,0.97,
+       0.70,0.97,0.87,0.77,0.87,0.49, 0.87,0.25,0.73,0.06,0.53,0.05]],
+ '1':[[0.22,0.28, 0.33,0.21,0.44,0.13,0.55,0.05, 0.57,0.30,0.55,0.64,0.50,0.97]],
+ '2':[[0.13,0.27, 0.17,0.10,0.40,0.02,0.60,0.07, 0.83,0.13,0.90,0.35,0.71,0.54,
+       0.55,0.69,0.32,0.81,0.13,0.95, 0.40,1.00,0.65,0.98,0.90,0.92]],
+ '3':[[0.14,0.17, 0.25,0.04,0.57,0.01,0.72,0.12, 0.86,0.22,0.79,0.41,0.51,0.48,
+       0.83,0.49,0.93,0.69,0.81,0.85, 0.67,0.99,0.31,1.00,0.12,0.86]],
+ '4':[[0.52,0.04, 0.42,0.24,0.24,0.48,0.06,0.70, 0.34,0.72,0.63,0.72,0.94,0.69],
+      [0.79,0.30, 0.77,0.52,0.74,0.76,0.71,0.97]],
+ '5':[[0.25,0.07, 0.21,0.21,0.18,0.35,0.17,0.46, 0.42,0.36,0.76,0.41,0.86,0.63,
+       0.93,0.84,0.58,1.01,0.13,0.89],
+      [0.24,0.08, 0.44,0.05,0.64,0.04,0.86,0.06]],
+ '6':[[0.82,0.05, 0.58,0.10,0.28,0.28,0.19,0.52, 0.10,0.78,0.16,0.98,0.40,0.99,
+       0.64,1.00,0.86,0.87,0.84,0.68, 0.82,0.50,0.48,0.42,0.20,0.62]],
+ '7':[[0.11,0.08, 0.36,0.05,0.62,0.05,0.89,0.07, 0.74,0.35,0.58,0.65,0.44,0.97]],
+ '8':[[0.62,0.04, 0.38,0.01,0.20,0.12,0.22,0.26, 0.24,0.38,0.38,0.44,0.48,0.50,
+       0.62,0.58,0.86,0.62,0.87,0.76, 0.88,0.94,0.60,1.03,0.40,0.96,
+       0.19,0.89,0.09,0.72,0.22,0.63, 0.32,0.55,0.42,0.53,0.48,0.50,
+       0.60,0.44,0.80,0.38,0.80,0.24, 0.80,0.11,0.72,0.01,0.59,0.05]],
+ '9':[[0.84,0.32, 0.84,0.14,0.68,0.02,0.50,0.04, 0.30,0.06,0.14,0.20,0.16,0.36,
+       0.18,0.52,0.42,0.60,0.60,0.54, 0.74,0.49,0.82,0.42,0.84,0.33,
+       0.86,0.58,0.74,0.84,0.44,0.98]]
+};
+
+const SLANT = 0.05;        // 整排往右倒一點，像右手寫的
+const PENW  = 0.134;       // 筆最粗處的厚度（乘 F）：夠厚才容得下四五圈耙痕
+const SEG   = 7;           // 每段貝茲切幾小段：夠圓滑，又不會讓合成太貴
+// 起筆收筆細、中段粗，峰值落在四成而不是正中間 —— 不做真正的可變寬度輪廓，
+// 分段換 lineWidth 就夠像了。兩端收在 0.62 而不是更細：再細下去筆尖只剩
+// 一兩圈耙痕，看起來像鐵絲不像溝。
+const prof = t => 0.62 + 0.38*Math.sin(Math.PI*Math.pow(t, 0.85));
+const seed = (i, ch) => i*7 + ch.charCodeAt(0);
+
+let polys = {};            // 取樣結果照「位置+字元」存著，layout 時清掉
+
+// 把一個數字取樣成折線，順便算累積長度 —— 畫虛線時每小段要接上一段的相位，
+// 不然每小段都從實線頭開始。控制點帶固定種子的抖動：同一個數字出現在兩個
+// 位置不會長得一模一樣，但同一個位置每幀都算出同一組點。
+function poly(d, ch, b){
+  const key = d + ch;
+  if(polys[key]) return polys[key];
+  const sd = seed(d, ch), out = [];
+  for(const st of PATHS[ch]){
+    const P = k => {
+      const u = st[k] + jit(k*2.7 + sd)*0.013, v = st[k+1] + jit(k*3.3 + sd)*0.013;
+      return [b.x + u*b.w + (1-v)*SLANT*b.h, b.y + v*b.h];
+    };
+    const pts = [P(0)];
+    for(let k=0; k+8 <= st.length; k+=6){
+      const a = P(k), c1 = P(k+2), c2 = P(k+4), e = P(k+6);
+      for(let s=1; s<=SEG; s++){
+        const t = s/SEG, m = 1-t, A = m*m*m, B = 3*m*m*t, C = 3*m*t*t, D = t*t*t;
+        pts.push([A*a[0]+B*c1[0]+C*c2[0]+D*e[0], A*a[1]+B*c1[1]+C*c2[1]+D*e[1]]);
+      }
+    }
+    const L = [0];
+    for(let i=1;i<pts.length;i++)
+      L.push(L[i-1] + Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
+    out.push({ pts, L, len: L[L.length-1] || 1 });
+  }
+  return polys[key] = out;
+}
+
+// w=0 是字形本身（用最粗的一筆當遮罩）；w>0 是一圈耙痕 —— 輪廓整條往內縮
+// (PENW*F - w)/2，帶子就貼著已經有粗細變化的輪廓走，筆尖細的地方自然少幾圈。
+function pen(c, sp, w){
+  const P = PENW*F, off = w ? P - w : 0, base = c.lineDashOffset;
+  for(const s of sp) for(let i=1;i<s.pts.length;i++){
+    const lw = P*prof((s.L[i-1]+s.L[i])/(2*s.len)) - off;
+    if(lw < 0.7) continue;
+    c.lineWidth = lw;
+    if(w) c.lineDashOffset = base + s.L[i-1];
+    c.beginPath();
+    c.moveTo(s.pts[i-1][0], s.pts[i-1][1]); c.lineTo(s.pts[i][0], s.pts[i][1]);
+    c.stroke();
+  }
+  c.lineDashOffset = base;
+}
+
+// ── 筆畫：耙齒在字形裡耙出來的溝 ──────────────────────────────────
+// 字形當遮罩，溝只填在遮罩內側，字以外一片平沙。平滑對條紋的反差是整塊的，
+// 不必靠描邊；靠描邊就變貼紙。align 讓離屏跟主畫布共用座標，溝才接得上
+function align(c, r){ c.setTransform(dpr,0,0,dpr, -r.x*dpr, -r.y*dpr); }
+function paste(d, o, r){ d.drawImage(o, 0, 0, o.width, o.height, r.x, r.y, r.w, r.h); }
+function stamp(c, r, dx){ c.drawImage(mcv, 0, 0, mcv.width, mcv.height, r.x+dx, r.y, r.w, r.h); }
+
+// 沙脊：耙子橫向走，沙只堆在筆畫的左右兩側。遮罩往一側平移再減掉原遮罩，
+// 剩下的月牙就是堆起來的沙 —— 輪廓越接近水平剩得越少，上下緣自然沒有框。
+function ridge(dst, r, dx, col, a){
+  tc.clearRect(r.x, r.y, r.w, r.h);
+  stamp(tc, r, dx);
+  tc.globalCompositeOperation = 'destination-out'; stamp(tc, r, 0);
+  tc.globalCompositeOperation = 'source-atop';
+  tc.fillStyle = col; tc.fillRect(r.x, r.y, r.w, r.h);
+  tc.globalCompositeOperation = 'source-over';
+  dst.globalAlpha = a; paste(dst, tcv, r); dst.globalAlpha = 1;
+}
+
+// 字形內部：沿著輪廓一圈包一圈往內耙，像繞石頭那樣。
+// 每一圈就是把同一條路徑用小一號的 lineWidth 再描一次疊上去，看到的就是
+// 貼著字形走的等距帶 —— 不必自己算距離場。w0 是第一圈的寬度，要大到能把
+// 整個形狀鋪滿（數字是筆畫厚度，圓點是直徑那一級）。
+// 圈距、粗細、深淺、缺口位置都帶固定種子的抖動：人耙不出同心圓。
+function rakeIn(c, r, draw, sd, w0){
+  c.save();
+  c.lineCap = 'round';                         // 斷口是耙齒抬起來的圓頭，不是切斷的直角
+  const cx = r.x + r.w/2, cy = r.y + r.h/2;
+  let w = w0;
+  for(let j=0; w > 1.5; j++){
+    const s = hash(j*4.7 + sd), dark = !(j & 1);
+    c.strokeStyle = dark ? mix(GROOVE, 0.42 + s*0.24) : mix(LIT, 0.34 + s*0.30);
+    c.lineWidth = w;
+    // 斷口少而長，像耙子偶爾抬起再放下。圓頭會往兩端各吐出半個線寬，
+    // 缺口得先把那一整個線寬讓出來，剩下的才是看得見的斷口
+    if(j){ c.setLineDash([F*(3.6 + s*4.0), w + F*(0.10 + s*0.11)]); c.lineDashOffset = hash(j*9.1+sd)*F*4; }
+    const o = dark ? 0 : F*0.004;              // 沙脊往光源那側偏，才有被照亮的立體感
+    c.save();
+    c.translate(LX*o + jit(j*5.3+sd)*F*0.007, LY*o + jit(j*13.7+sd)*F*0.007);
+    // 繞著格子中心微轉：圈與圈在一側收攏、另一側岔開，不是同心線
+    c.translate(cx, cy); c.rotate(jit(j*3.1+sd)*0.024); c.translate(-cx, -cy);
+    draw(c, w);
+    c.restore();
+    w -= 2*gstep*(dark ? 1.15 : 0.72)*(0.74 + hash(j*7.9+sd)*0.52);  // 溝寬脊窄
+  }
+  c.restore();
+}
+
+// draw(c, w) 把形狀畫出來：w=0 是實心的遮罩，w>0 是寬 w 的一圈耙痕。
+// r 是工作區（比字大一圈，容得下沙脊）。
+// 合成好的成品照位置存著，字沒變就直接貼 —— 跳整點時四位同時動，每幀重合成太貴。
+function ink(i, r, ch, draw, w0){
+  if(!mc) return;                              // 模擬環境沒有離屏 canvas
+  let s = sprites[i];
+  if(!s) s = sprites[i] = { ch:null, o:off(SW, SH) };
+  if(s.ch !== ch){
+    s.ch = ch;
+    const sc = s.o.getContext('2d');
+    align(mc, r); align(tc, r); align(sc, r);
+    sc.clearRect(r.x, r.y, r.w, r.h);
+    mc.clearRect(r.x, r.y, r.w, r.h);
+    mc.fillStyle = mc.strokeStyle = '#fff';
+    draw(mc, 0);
+    const d = Math.max(2, F*0.019);
+    ridge(sc, r, -d, 'rgb(' + LIT + ')', 0.42);    // 沙被推到字外堆成脊，迎光側被照亮
+    ridge(sc, r,  d, 'rgb(' + GROOVE + ')', 0.14); // 背光側是沙堆自己的暗面，不是投影
+    // 溝只填在字裡：先沿輪廓耙一整圈一整圈，再用遮罩把字以外的切掉
+    tc.clearRect(r.x, r.y, r.w, r.h);
+    rakeIn(tc, r, draw, seed(i, ch), w0);          // 種子帶位置，同一個數字在兩位不會長得一樣
+    if(gpT){                                       // 顆粒積在低處：只補在耙過的地方
+      tc.globalCompositeOperation = 'source-atop';
+      tc.fillStyle = gpT; tc.fillRect(r.x, r.y, r.w, r.h);
+    }
+    tc.globalCompositeOperation = 'destination-in'; stamp(tc, r, 0);
+    tc.globalCompositeOperation = 'source-over';
+    sc.globalAlpha = 0.86;                         // 留一點底沙透上來，字才不像貼上去的
+    sc.filter = 'blur(' + Math.max(0.5, F*0.004) + 'px)';  // 圈與圈之間是沙坡不是色塊
+    paste(sc, tcv, r);
+    sc.filter = 'none'; sc.globalAlpha = 1;
+  }
+  paste(ctx, s.o, r);
+}
+
+const glyph = (d, ch) => { const b = boxes[d];
+  if(ch) ink(d, cellOf(b), ch, (c,w) => pen(c, poly(d, ch, b), w), PENW*F); };
+
+// 木柄 + 橫桿。span = 橫桿長度，hand = 柄長。
+// teeth=true 是有齒的那一面（耙出），false 是翻過來的平背板（推平）
+function rake(x, y, ang, span, hand, teeth){
+  const ux = Math.cos(ang), uy = Math.sin(ang), nx = -uy, ny = ux;
+  const half = span/2, e = Math.min(span*0.13, F*0.019);
+  ctx.save();
+  ctx.shadowColor = 'rgba(110,100,84,.32)';
+  ctx.shadowBlur = span*0.16; ctx.shadowOffsetY = span*0.06;
+  const ha = ang + Math.PI + 0.55;
+  line(x, y, x + Math.cos(ha)*hand, y + Math.sin(ha)*hand, WOOD, Math.min(span*0.09, F*0.015));
+  line(x+nx*half, y+ny*half, x-nx*half, y-ny*half, WOOD, teeth ? e : e*2.6);
+  ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  if(teeth){
+    const n = Math.max(6, Math.round(span/(F*0.038)));
+    for(let k=0;k<n;k++){
+      const o = (k - (n-1)/2) * (span/n);
+      const px = x + nx*o, py = y + ny*o;
+      line(px, py, px + ux*span*0.2, py + uy*span*0.2, WOOD_D, Math.min(span*0.05, F*0.009));
+    }
+  }else{
+    // 背板推平的那條直邊：一整條沒有齒，看得出耙翻了面
+    line(x+nx*half+ux*e*1.3, y+ny*half+uy*e*1.3, x-nx*half+ux*e*1.3, y-ny*half+uy*e*1.3,
+         WOOD_D, Math.min(span*0.025, F*0.005));
+  }
+  ctx.restore();
+}
+
+// 冒號：兩顆圓石，不用字形的方點。圓沿著輪廓耙出來就是一圈圈同心圓 ——
+// 繞石頭的漣漪，跟數字那些貼著筆畫走的環帶是同一種語言。
+// 半徑與間距照字形冒號的比例，版面不動。直式版面讓兩顆並排當上下兩列的分隔。
+function colonInk(){
+  const r = F*0.058, d = F*0.40;
+  ink(4, region(colon.x, colon.y), 'o', (c,w) => {
+    c.beginPath();
+    for(const s of [-1, 1]){
+      const x = colon.x + (colon.rot ? s*d/2 : 0), y = colon.y + (colon.rot ? 0 : s*d/2);
+      c.moveTo(x + r, y); c.arc(x, y, r, 0, Math.PI*2);
+    }
+    c[w ? 'stroke' : 'fill']();
+  }, F*0.32);
+}
+
+// ── 狀態 ────────────────────────────────────────────────────────
+// drawn = 畫面上真的耙好的四位；runs = 正在動的那幾位（一位最多一個）
+let drawn = ['','','',''];
+let runs = [];
+
+function commit(){ document.documentElement.dataset.shown = drawn.join(''); }
+
+function timeStr(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
+}
+
+// 髒區要包得下耙子的木柄與齒，而且邊界要對齊裝置像素 ——
+// clip 落在半個像素上時底圖蓋不乾淨，耙過的地方會留下一條殘影
+function rectOf(d){
+  const b = boxes[d], p = b.t*4.0;
+  const x0 = Math.max(0, q(b.x-p)), y0 = Math.max(0, q(b.y-p));
+  const x1 = Math.min(W, q(b.x+b.w+p)), y1 = Math.min(H, q(b.y+b.h+p));
+  return { x:x0, y:y0, w:x1-x0, h:y1-y0 };
+}
+
+function blit(r){
+  if(base) ctx.drawImage(base, r.x*dpr, r.y*dpr, r.w*dpr, r.h*dpr, r.x, r.y, r.w, r.h);
+  else { ctx.fillStyle = SAND; ctx.fillRect(r.x, r.y, r.w, r.h); }
+}
+
+// 一位數字的格子：抹平與耙出都在這塊裡發生，也是離屏的工作區
+function region(cx, cy){ return { x: q(cx - SW/2), y: q(cy - SH/2), w: SW, h: SH }; }
+function cellOf(b){ return region(b.x + b.w/2, b.y + b.h/2); }
+
+function repaint(r){
+  const rect = r || { x:0, y:0, w:W, h:H };
+  if(rect.w <= 0 || rect.h <= 0) return;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(rect.x, rect.y, rect.w, rect.h); ctx.clip();
+  blit(rect);
+  colonInk();
+  for(let d=0; d<4; d++){
+    const run = runs.find(x => x.d === d);
+    if(!run){ glyph(d, drawn[d]); continue; }   // 底就是平沙，把字的溝耙上去就好
+    const cl = cellOf(boxes[d]);
+    const yy = cl.y + cl.h*smooth(Math.min(run.t/(run.phase ? T_DRAW : T_ERASE), 1));
+    // 抹平：耙背走過的上半推回平沙（底圖本來就是），下半還留著舊字的溝。
+    // 耙出：耙齒走過的上半才有新字的溝，下半還是平沙。
+    const y0 = run.phase ? cl.y : yy, y1 = run.phase ? yy : cl.y + cl.h;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(cl.x, y0, cl.w, Math.max(0, y1-y0)); ctx.clip();
+    glyph(d, run.phase ? run.to : run.from);
+    ctx.restore();
+    rake(cl.x + cl.w/2, yy, Math.PI/2, cl.w, cl.w*0.42, run.phase === 1);
+  }
+  ctx.restore();
+}
+
+// 時間變了就吃掉最新目標，不排隊：手上那位直接瞬間定案再重新起耙，
+// 這樣連跳好幾分鐘也會收斂，不會卡在舊值。
+function sync(touched){
+  const t = timeStr();
+  for(let d=0; d<4; d++){
+    const i = runs.findIndex(r => r.d === d);
+    if(i >= 0){
+      if(runs[i].to === t[d]) continue;
+      drawn[d] = runs[i].to; runs.splice(i,1); commit(); touched.add(d);
+    }
+    if(drawn[d] === t[d]) continue;
+    touched.add(d);
+    if(RM){ drawn[d] = t[d]; commit(); }
+    else runs.push({ d, from: drawn[d], to: t[d], t: 0, phase: 0 });
+  }
+}
+
+let last = 0;
+function frame(now){
+  const dt = Math.min((now - last)/1000, 0.12); last = now;
+  const touched = new Set();
+  sync(touched);
+  for(const r of runs) touched.add(r.d);
+  for(let i=runs.length-1; i>=0; i--){
+    const r = runs[i]; r.t += dt;
+    if(r.phase === 0 && r.t >= T_ERASE){ r.phase = 1; r.t -= T_ERASE; }
+    if(r.phase === 1 && r.t >= T_DRAW){ drawn[r.d] = r.to; runs.splice(i,1); commit(); }
+  }
+  // 只重畫真的在變的那一位；靜止時整幀不畫
+  for(const d of touched) repaint(rectOf(d));
+  requestAnimationFrame(frame);
+}
+
+// ── 控制 ────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const bWake = $('bWake'), bFull = $('bFull'), bInstall = $('bInstall');
+
+bFull.onclick = () => {
+  if(document.fullscreenElement) document.exitFullscreen();
+  else $('stage').requestFullscreen?.();
+};
+
+let wl = null, keepAwake = false;
+async function setWake(on){
+  keepAwake = on;
+  bWake.setAttribute('aria-pressed', String(on));
+  try{
+    if(on && 'wakeLock' in navigator){ wl = await navigator.wakeLock.request('screen'); }
+    else if(wl){ await wl.release(); wl = null; }
+  }catch(_){}
+}
+bWake.onclick = () => setWake(!keepAwake);
+document.addEventListener('visibilitychange', () => {
+  if(keepAwake && document.visibilityState === 'visible') setWake(true);
+});
+
+let deferred = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; bInstall.hidden = false; });
+bInstall.onclick = async () => {
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice;
+  deferred = null; bInstall.hidden = true;
+};
+addEventListener('appinstalled', () => { bInstall.hidden = true; });
+
+let restTimer = null;
+function wake(){
+  document.body.classList.remove('rest');
+  clearTimeout(restTimer);
+  restTimer = setTimeout(() => document.body.classList.add('rest'), 3000);
+}
+['pointermove','pointerdown','keydown','touchstart'].forEach(ev => addEventListener(ev, wake, {passive:true}));
+wake();
+
+let rz = null;
+addEventListener('resize', () => {
+  clearTimeout(rz);
+  rz = setTimeout(() => { layout(); repaint(null); }, 150);
+});
+
+// 被展示頁 iframe 嵌入時不註冊 sw、不留控制列
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+// ── 啟動：不做入場動畫，直接畫好成品 ──────────────────────────────
+layout();
+drawn = timeStr().split('');
+commit();
+repaint(null);
+last = performance.now();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "id": "zen",
+  "name": "枯山水時鐘",
+  "tagline": "耙痕就是數字，換分鐘時耙子走過，抹平舊的耙出新的",
+  "created": "2026-07-29",
+  "tags": ["zen", "canvas", "pwa"],
+  "accent": "#c9bfa6",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-27T09:06:04+08:00",
+    "settle": 1200
+  }
+}
