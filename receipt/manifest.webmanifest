@@ -1,0 +1,41 @@
+{
+  "id": "receipt-clock",
+  "name": "收據時鐘",
+  "short_name": "收據",
+  "description": "熱感印表機每分鐘吐一張把時間當商品賣的帳單，過了掉落線就捲成一團落到地上堆著。",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": [
+    "fullscreen",
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "background_color": "#1b1815",
+  "theme_color": "#1b1815",
+  "categories": [
+    "utilities"
+  ],
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

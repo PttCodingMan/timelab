@@ -1,0 +1,14 @@
+{
+  "id": "receipt",
+  "name": "收據時鐘",
+  "tagline": "熱感印表機每分鐘吐一張帳單，把這一分鐘賣給你，過期就撕下來，飄著掉出畫面外",
+  "created": "2026-07-29",
+  "tags": ["receipt", "canvas", "pwa"],
+  "accent": "#e9e0cd",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-29T09:07:12+08:00",
+    "settle": 1200
+  }
+}

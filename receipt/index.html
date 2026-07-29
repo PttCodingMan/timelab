@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>收據時鐘</title>
+<meta name="description" content="熱感印表機每分鐘吐一張把時間當商品賣的帳單，過了掉落線就撕下來，飄著掉出畫面外。">
+<meta name="theme-color" content="#1b1815">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="收據時鐘">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<style>
+  :root{
+    --bg:#1b1815;
+    --ink:#8a7f6e;
+    --line:#3a342d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);overflow:hidden;overscroll-behavior:none}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif;
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #stage{position:fixed;inset:0;background:var(--bg)}
+  canvas{display:block;width:100%;height:100%}
+
+  #ctrl{
+    position:fixed; right:max(16px, env(safe-area-inset-right));
+    bottom:max(16px, env(safe-area-inset-bottom));
+    display:flex; gap:8px;
+    transition:opacity 1.2s ease;
+  }
+  button{
+    font:inherit; font-size:12px; letter-spacing:.08em;
+    color:var(--ink); background:transparent; border:1px solid var(--line);
+    padding:8px 12px; border-radius:2px; cursor:pointer; touch-action:manipulation;
+  }
+  button:hover{ background:var(--line); }
+  button:focus-visible{ outline:2px solid var(--ink); outline-offset:2px; }
+  button[aria-pressed="true"]{ border-color:var(--ink); }
+  button[hidden]{ display:none; }
+  body.rest #ctrl{ opacity:0; pointer-events:none; }
+  /* ?embed=1 — 在展示頁的 iframe 裡預覽時只留錶面 */
+  body.embed #ctrl{ display:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+</div>
+<div id="ctrl">
+  <button id="bInstall" hidden>安裝</button>
+  <button id="bWake" aria-pressed="false">防休眠</button>
+  <button id="bFull">全螢幕</button>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const TAU = Math.PI*2;
+
+// ── 色票：寫成 JS 常數，不從 CSS 讀 —— 模擬器的 getComputedStyle 一律回 #888888 ──
+const BG    = '#1b1815';
+const PAPER = '#f2ece0';   // 收據紙
+const INK   = '#23211f';   // 熱感字
+const GLOW  = '#d9583c';   // 印字頭紅光
+const SHADE = '120,104,84';                     // 紙上的陰影，全篇共用這一支
+const MONO  = 'ui-monospace,SFMono-Regular,Menlo,Consolas,monospace';
+
+// ── 節奏 ──────────────────────────────────────────────────────────
+const T_FEED = 2.6;   // 送一張收據出來。整分之間紙完全不動 —— 真的收據機也不空轉
+const GRAV   = 1.2;    // 撕下來那張的重力：每秒加速幾個畫面高，螢幕多大都掉一樣快。
+                       // 刻意比真重力慢 —— 紙很輕，而且要看得清楚它飄出畫面
+
+// ── 收據版面：單位是行高，從紙的上緣往下累加 ────────────────────────
+// 0.6 上留白 / 1.5 店名 / 1.1 分店 / 1.1 日期 / 0.9 虛線 / 5.5 大字 / 0.9 虛線 /
+// 3.0 品項（保留三行，實際 1–3 行置中）/ 0.9 虛線 / 1.1 小計 / 1.1 稅 / 1.3 總計 /
+// 0.9 虛線 / 1.2 序號 / 1.9 條碼 / 1.3 THANK YOU / 0.6 下留白
+const L_TOT = 24.9;    // 總行數 = 收據高
+const L_BIG = 5.35;    // 大字帶上緣（行）
+const BIG_H = 5.2;     // 大字高（行）
+const REVEAL = L_BIG + BIG_H;   // 送到這一行，大字最後一排點才真的畫出來
+
+// ── 5x7 點陣：每個點畫成一顆小方塊，放大後就是熱感機的顆粒感。
+// 自刻是因為模擬器的 measureText 固定回 {width:10}，版面不能靠文字量測 ──
+const GLY = {};
+for(const [k, v] of Object.entries({
+  '0':'01110,10001,10011,10101,11001,10001,01110',
+  '1':'00100,01100,00100,00100,00100,00100,01110',
+  '2':'01110,10001,00001,00010,00100,01000,11111',
+  '3':'11111,00010,00100,00010,00001,10001,01110',
+  '4':'00010,00110,01010,10010,11111,00010,00010',
+  '5':'11111,10000,11110,00001,00001,10001,01110',
+  '6':'00110,01000,10000,11110,10001,10001,01110',
+  '7':'11111,00001,00010,00100,01000,01000,01000',
+  '8':'01110,10001,10001,01110,10001,10001,01110',
+  '9':'01110,10001,10001,01111,00001,00010,01100',
+  ':':'0,1,1,0,1,1,0'
+})) GLY[k] = v.split(',');
+
+// 固定種子的偽亂數（mulberry32）：序號、條碼、每捲紙的落點都由「該分鐘」長出來，
+// tools/shoot.py 凍結時間截圖時每次長一樣
+function rng(seed){
+  let a = seed >>> 0;
+  return () => {
+    a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const p2 = n => String(n).padStart(2, '0');
+const WD = '日一二三四五六';
+
+// ── 版面 ──────────────────────────────────────────────────────────
+let W=0, H=0, dpr=1, RW=0, RH=0, LH=0, U=0, CX=0, HEAD=0, DROP=0;
+
+// ── 狀態 ──────────────────────────────────────────────────────────
+let cur = 0;        // 紙帶最上面那張收據的 epoch 分鐘數
+let strip = [];     // 紙帶上的收據，[0] 最新
+let runs = [];      // 進行中的送紙動畫，正常最多一個
+let falls = [];     // 撕下來、正在自由落體的收據
+let dirty = true;   // 靜止時整幀不畫，有東西變了才重畫
+
+function layout(){
+  W = cv.clientWidth || 1; H = cv.clientHeight || 1;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  CX = W/2;
+  HEAD = H*0.09;                       // 出紙口
+  DROP = H*0.75;                       // 掉落線：紙垂過這裡就撕開、自由落體。
+                                       // 留下方 25% 當掉落走廊 —— 再往下撕，落下就快到看不見了
+  // 橫式由高度決定（上限放寬，紙帶明顯變大），直式由寬度決定
+  RW = Math.min(W*0.74, H*0.62);
+  RH = RW*1.10;
+  LH = RH/L_TOT;
+  U  = BIG_H*LH/7;                     // 大字一顆點的邊長
+  fitStrip();
+  dirty = true;
+}
+
+// 紙帶長度只跟版面有關：短了補舊的、長了砍掉。
+// 判準跟 dropCheck 同一條 —— 靜止時尾端剛好垂過掉落線，再多一張就會被撕掉
+function fitStrip(){
+  if(!strip.length) return;
+  while(HEAD + strip.length*RH < DROP) strip.push(strip[strip.length-1] - 1);
+  while(strip.length > 2 && HEAD + (strip.length-1)*RH >= DROP) strip.pop();
+}
+
+// ── 撕下來的那一張：自由落體，一邊掉一邊飄 ──────────────────────────
+// 只存種子撕開當下抽出來的幾個數，物理量在畫的時候才展開
+function tearOff(m){
+  const rn = rng(Math.imul(m, 2654435761));
+  falls.push({
+    m,
+    y:    DROP + RH/2,
+    vy:   RH/T_FEED,               // 撕開那一刻的初速接近送紙速度，不是憑空從靜止掉下來
+    t:    0,
+    amp:  RW*(0.05 + rn()*0.09),   // 左右飄的幅度
+    freq: 1.0 + rn()*0.9,          // 飄的快慢
+    ph:   rn()*TAU,
+    rot0: (rn() - 0.5)*0.3,
+    vrot: (rn() - 0.5)*1.6          // 一邊掉一邊慢慢轉
+  });
+}
+
+// ── 送紙 ──────────────────────────────────────────────────────────
+// ease-out：出紙口一開始就衝出來，接近定位才慢下來
+const easeOut = t => 1 - Math.pow(1-t, 3);
+const feed = () => runs.length ? RH*easeOut(Math.min(1, runs[0].t/T_FEED)) : RH;
+
+// 收據 j 的上緣。j=0 釘在出紙口不動，內容用 clip 一行行揭露；
+// 底下那幾張整批往下走
+const topOf = (j, fed) => j ? HEAD + fed + (j-1)*RH : HEAD;
+
+// 撕的門檻就是掉落線：最下面那張的上緣撕線垂過 DROP 就直接撕開。
+// instant 是追趕用的：一次補幾百分鐘時不能讓幾百張同時飛出來，直接丟掉不補動畫
+function dropCheck(fed, instant){
+  while(strip.length > 1 && topOf(strip.length-1, fed) >= DROP){
+    const m = strip.pop();
+    if(!instant) tearOff(m);
+  }
+}
+
+function reset(m){
+  cur = m;
+  strip = [m]; runs.length = 0; falls.length = 0;
+  fitStrip();
+  dirty = true;
+}
+
+function sync(){
+  const m = Math.floor(Date.now()/60000);
+  if(m === cur) return;
+  if(m < cur || m - cur > 3000){ reset(m); return; }   // 時鐘被改過或睡太久，整個重來
+  // 落後 ≥2 分鐘就把中間幾張瞬間補完，只有最後一張跑動畫 ——
+  // 排隊補印會讓時鐘永遠追不上牆上時間
+  for(let k = cur+1; k < m; k++){ strip.unshift(k); dropCheck(RH, true); }
+  strip.unshift(m);
+  cur = m;
+  runs.length = 0;
+  if(RM) dropCheck(RH, true); else runs.push({ t: 0 });
+  dirty = true;
+}
+
+function shown(m){
+  const d = new Date(m*60000);
+  document.documentElement.dataset.shown = p2(d.getHours()) + p2(d.getMinutes());
+}
+
+// ── 一張收據 ──────────────────────────────────────────────────────
+function receipt(m, x, top){
+  const d = new Date(m*60000);
+  const hh = p2(d.getHours()), mm = p2(d.getMinutes());
+  const lh = LH, pad = RW*0.10, cx = x + RW/2;
+
+  ctx.fillStyle = PAPER;
+  ctx.fillRect(x, top, RW, RH);
+  // 紙是從捲筒拉出來的，兩側還往後彎：中間受光、兩邊各暗一階
+  const g = ctx.createLinearGradient(x, 0, x+RW, 0);
+  g.addColorStop(0,    'rgba(' + SHADE + ',.26)');
+  g.addColorStop(0.16, 'rgba(' + SHADE + ',.04)');
+  g.addColorStop(0.48, 'rgba(255,255,255,.18)');
+  g.addColorStop(0.88, 'rgba(' + SHADE + ',.05)');
+  g.addColorStop(1,    'rgba(' + SHADE + ',.28)');
+  ctx.fillStyle = g; ctx.fillRect(x, top, RW, RH);
+
+  perf(x, top);
+
+  // ly 是基線位置，單位是行高
+  const put = (s, ly, sz, al, px, bold) => {
+    ctx.font = (bold ? 'bold ' : '') + (sz*lh).toFixed(2) + 'px ' + MONO;
+    ctx.textAlign = al;
+    ctx.fillText(s, px, top + ly*lh);
+  };
+  ctx.fillStyle = INK;
+  put('CLOCK LAB', 1.75, 1.10, 'center', cx, true);
+  put('台北店   REG #04', 2.92, 0.74, 'center', cx);
+  put(d.getFullYear() + '-' + p2(d.getMonth()+1) + '-' + p2(d.getDate())
+      + ' (' + WD[d.getDay()] + ')', 4.02, 0.74, 'center', cx);
+  dash(x, top + 4.75*lh);
+
+  bigTime(hh + ':' + mm, cx, top + L_BIG*lh, m);
+
+  dash(x, top + 11.15*lh);
+
+  // 把時間當商品賣：$1／分鐘，整點多一行 HOUR，午夜多一行 DAY
+  const items = [['MINUTE', 1]];
+  if(mm === '00') items.push(['HOUR', 60]);
+  if(hh === '00' && mm === '00') items.push(['DAY', 1440]);
+  const total = items.reduce((s, it) => s + it[1], 0);
+  const off = 11.6 + (3 - items.length)/2;
+  ctx.fillStyle = INK;
+  items.forEach((it, i) => {
+    const ly = off + i + 0.80;
+    put(it[0], ly, 0.78, 'left', x + pad);
+    put('x1', ly, 0.78, 'center', x + RW*0.58);
+    put('$' + it[1], ly, 0.78, 'right', x + RW - pad);
+  });
+
+  dash(x, top + 15.05*lh);
+  put('SUBTOTAL', 16.32, 0.78, 'left', x + pad);
+  put('$' + total, 16.32, 0.78, 'right', x + RW - pad);
+  put('TAX', 17.42, 0.78, 'left', x + pad);
+  put('-', 17.42, 0.78, 'right', x + RW - pad);
+  put('TOTAL', 18.65, 0.92, 'left', x + pad, true);
+  put('$' + total, 18.65, 0.92, 'right', x + RW - pad, true);
+
+  dash(x, top + 19.45*lh);
+  put('NO.' + d.getFullYear() + p2(d.getMonth()+1) + p2(d.getDate()) + '-' + hh + mm,
+      20.75, 0.72, 'center', cx);
+  bars(x + pad, top + 21.35*lh, RW - pad*2, 1.45*lh, m);
+  put('T H A N K   Y O U', 23.90, 0.78, 'center', cx);
+}
+
+// 撕線：虛線加兩側咬出來的半圓缺口。收據跟收據就是在這裡分開的
+function dash(x, y){
+  ctx.save();
+  ctx.strokeStyle = 'rgba(' + SHADE + ',.55)';
+  ctx.lineWidth = Math.max(1, LH*0.07);
+  ctx.setLineDash([LH*0.40, LH*0.32]);
+  ctx.beginPath(); ctx.moveTo(x + LH*0.5, y); ctx.lineTo(x + RW - LH*0.5, y); ctx.stroke();
+  ctx.restore();
+}
+function perf(x, y){
+  dash(x, y);
+  ctx.fillStyle = BG;
+  ctx.beginPath(); ctx.arc(x, y, LH*0.26, -Math.PI/2, Math.PI/2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x + RW, y, LH*0.26, Math.PI/2, Math.PI*1.5); ctx.fill();
+}
+
+// 大字：一顆點一個小方塊，濃淡帶固定種子的抖動 —— 熱感頭的溫度本來就不均勻
+function bigTime(s, cx, top, m){
+  const rn = rng(Math.imul(m, 40503) ^ 0x9e37);
+  let units = -1;
+  for(const ch of s) units += GLY[ch][0].length + 1;
+  let px = cx - units*U/2;
+  ctx.fillStyle = INK;
+  for(const ch of s){
+    const g = GLY[ch];
+    for(let r=0; r<7; r++) for(let c=0; c<g[r].length; c++) if(g[r][c] === '1'){
+      ctx.globalAlpha = 0.80 + rn()*0.20;
+      ctx.fillRect(px + c*U, top + r*U, U*0.92, U*0.92);
+    }
+    px += (g[0].length + 1)*U;
+  }
+  ctx.globalAlpha = 1;
+}
+
+function bars(x, y, w, h, m){
+  const rn = rng(Math.imul(m, 2246822519));
+  const u = Math.max(1, w/74);
+  ctx.fillStyle = INK;
+  for(let bx = x; bx < x + w - u*4; ){
+    const bw = u*(1 + Math.floor(rn()*3));
+    if(rn() < 0.62) ctx.fillRect(bx, y, bw, h);
+    bx += bw + u;
+  }
+}
+
+// ── 畫 ────────────────────────────────────────────────────────────
+function draw(){
+  const fed = feed();
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle = BG; ctx.fillRect(0, 0, W, H);
+  const vg = ctx.createRadialGradient(CX, HEAD, 0, CX, HEAD, Math.max(W,H)*0.95);
+  vg.addColorStop(0, 'rgba(255,236,208,.10)');
+  vg.addColorStop(1, 'rgba(255,236,208,0)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+
+  tape(fed);
+  for(const f of falls){
+    const x = CX + Math.sin(f.ph + f.t*f.freq)*f.amp;
+    ctx.save();
+    ctx.translate(x, f.y);
+    ctx.rotate(f.rot0 + f.vrot*f.t);
+    receipt(f.m, -RW/2, -RH/2);
+    ctx.restore();
+  }
+  printer();
+}
+
+// 由上往下畫：撕線在紙邊咬出來的缺口要落在上一張的下緣，先畫上面那張才蓋得到
+function tape(fed){
+  const x = CX - RW/2;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x - LH, HEAD, RW + LH*2, DROP - HEAD); ctx.clip();
+  // 最上面那張是正在印的：clip 到已經送出來的長度，圖案就一行行從出紙口冒出來
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x - LH, HEAD, RW + LH*2, Math.max(0, fed)); ctx.clip();
+  receipt(strip[0], x, HEAD);
+  ctx.restore();
+  for(let j=1; j<strip.length; j++){
+    const top = topOf(j, fed);
+    if(top > DROP) break;
+    receipt(strip[j], x, top);
+  }
+  // 紙帶垂過掉落線之前那一小段淡入背景色：收尾不是被硬邊切一刀
+  const fadeH = LH*2.2;
+  const fade = ctx.createLinearGradient(0, DROP - fadeH, 0, DROP);
+  fade.addColorStop(0, 'rgba(27,24,21,0)');
+  fade.addColorStop(1, 'rgba(27,24,21,1)');
+  ctx.fillStyle = fade;
+  ctx.fillRect(x - LH, DROP - fadeH, RW + LH*2, fadeH);
+  ctx.restore();
+  // 大字最後一排點真的畫出來的那一幀才算數
+  if(fed >= REVEAL*LH) shown(strip[0]);
+}
+
+// 出紙口＋印字頭紅光，固定不動
+function printer(){
+  const hw = RW*0.88, hh = Math.min(HEAD*0.98, RW*0.36), r = hh*0.34;
+  ctx.fillStyle = '#2b2622';
+  ctx.beginPath();
+  ctx.moveTo(CX - hw, 0); ctx.lineTo(CX + hw, 0);
+  ctx.lineTo(CX + hw, HEAD - r);
+  ctx.quadraticCurveTo(CX + hw, HEAD, CX + hw - r, HEAD);
+  ctx.lineTo(CX - hw + r, HEAD);
+  ctx.quadraticCurveTo(CX - hw, HEAD, CX - hw, HEAD - r);
+  ctx.closePath(); ctx.fill();
+  // 機殼下緣的亮邊：少了這條就是一塊貼在上面的黑色方塊
+  ctx.strokeStyle = 'rgba(255,240,220,.10)'; ctx.lineWidth = Math.max(1, hh*0.05);
+  ctx.beginPath(); ctx.moveTo(CX - hw + r, HEAD*0.30); ctx.lineTo(CX + hw - r, HEAD*0.30); ctx.stroke();
+
+  ctx.fillStyle = '#0c0b0a';
+  ctx.fillRect(CX - RW*0.58, HEAD - hh*0.26, RW*1.16, hh*0.26);
+
+  // 送紙時印字頭最亮，靜止時只剩待機的餘光
+  const hot = runs.length ? 1 : 0.28;
+  ctx.fillStyle = GLOW;
+  ctx.globalAlpha = 0.30 + 0.55*hot;
+  ctx.fillRect(CX - RW*0.54, HEAD - hh*0.10, RW*1.08, Math.max(1, hh*0.055));
+  ctx.globalAlpha = 1;
+  const gg = ctx.createLinearGradient(0, HEAD - hh*0.10, 0, HEAD + RW*0.16);
+  gg.addColorStop(0, 'rgba(217,88,60,' + (0.10 + 0.34*hot).toFixed(2) + ')');
+  gg.addColorStop(1, 'rgba(217,88,60,0)');
+  ctx.fillStyle = gg;
+  ctx.fillRect(CX - RW*0.60, HEAD - hh*0.10, RW*1.20, RW*0.26 + hh*0.10);
+
+  ctx.fillStyle = runs.length ? GLOW : '#4a4038';
+  ctx.beginPath(); ctx.arc(CX + hw*0.80, HEAD*0.42, Math.max(1.5, hh*0.06), 0, TAU); ctx.fill();
+}
+
+// ── 迴圈：靜止時整幀不畫 ──────────────────────────────────────────
+let last = 0;
+function frame(now){
+  const dt = Math.min((now - last)/1000, 0.12); last = now;
+  sync();
+  const busy = runs.length || falls.length;
+  for(let i=runs.length-1; i>=0; i--){
+    runs[i].t += dt;
+    if(runs[i].t >= T_FEED) runs.splice(i, 1);
+  }
+  const hd = Math.hypot(RW, RH)/2;   // 完全離開下緣才算數：轉了角，要用對角線包住整張
+  for(let i=falls.length-1; i>=0; i--){
+    const f = falls[i];
+    f.t += dt; f.vy += GRAV*H*dt; f.y += f.vy*dt;
+    if(f.y - hd > H) falls.splice(i, 1);
+  }
+  dropCheck(feed());
+  if(busy || dirty){ draw(); dirty = false; }
+  requestAnimationFrame(frame);
+}
+
+// ── 控制 ──────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const bWake = $('bWake'), bFull = $('bFull'), bInstall = $('bInstall');
+
+bFull.onclick = () => {
+  if(document.fullscreenElement) document.exitFullscreen();
+  else $('stage').requestFullscreen?.();
+};
+
+let wl = null, keepAwake = false;
+async function setWake(on){
+  keepAwake = on;
+  bWake.setAttribute('aria-pressed', String(on));
+  try{
+    if(on && 'wakeLock' in navigator){ wl = await navigator.wakeLock.request('screen'); }
+    else if(wl){ await wl.release(); wl = null; }
+  }catch(_){}
+}
+bWake.onclick = () => setWake(!keepAwake);
+document.addEventListener('visibilitychange', () => {
+  if(keepAwake && document.visibilityState === 'visible') setWake(true);
+});
+
+let deferred = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; bInstall.hidden = false; });
+bInstall.onclick = async () => {
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice;
+  deferred = null; bInstall.hidden = true;
+};
+addEventListener('appinstalled', () => { bInstall.hidden = true; });
+
+let restTimer = null;
+function wake(){
+  document.body.classList.remove('rest');
+  clearTimeout(restTimer);
+  restTimer = setTimeout(() => document.body.classList.add('rest'), 3000);
+}
+['pointermove','pointerdown','keydown','touchstart'].forEach(ev => addEventListener(ev, wake, {passive:true}));
+wake();
+
+let rz = null;
+addEventListener('resize', () => {
+  clearTimeout(rz);
+  rz = setTimeout(layout, 150);
+});
+
+// 被展示頁 iframe 嵌入時不註冊 sw、不留控制列
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+// ── 啟動：不做入場動畫，直接畫好成品 ────────────────────────────────
+layout();
+reset(Math.floor(Date.now()/60000));
+draw();
+last = performance.now();
+requestAnimationFrame(frame);
+})();
+</script>
+</body></html>
