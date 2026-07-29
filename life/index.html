@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>生命遊戲時鐘</title>
+<meta name="description" content="Conway's Game of Life 跑在整片 CRT 上，時間以永不變的靜物釘在細胞海裡。">
+<meta name="theme-color" content="#0a0a0a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="生命遊戲時鐘">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#0a0a0a;overflow:hidden;overscroll-behavior:none}
+  body{font-family:ui-monospace,'SFMono-Regular',Menlo,'Courier New',monospace;
+       color:#8a8a8a;-webkit-tap-highlight-color:transparent}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+  /* 掃描線是純 CSS 的一層貼紙，JS 完全不碰 */
+  #scan{position:fixed;inset:0;pointer-events:none;
+        background:repeating-linear-gradient(0deg,rgba(0,0,0,.30) 0 1px,transparent 1px 3px);
+        mix-blend-mode:multiply}
+  /* ?embed=1 — 在展示頁的 iframe 裡預覽時只留錶面 */
+  body.embed #scan{display:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="scan"></div>
+
+<script>
+(() => {
+'use strict';
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// 三階亮度：數字最亮、HUD 居中、背景細胞最暗。可讀性全靠這個階差。
+const FG = '#ffffff', DIM = '#4a4a4a', HUD = '#8a8a8a', TRAIL = 'rgba(10,10,10,0.25)';
+
+// 5×7 點陣。本專案的時鐘彼此不共用程式碼，所以各自持有一份字表。
+const GLYPH = {
+  '0':["01110","10001","10011","10101","11001","10001","01110"],
+  '1':["00100","01100","00100","00100","00100","00100","01110"],
+  '2':["01110","10001","00001","00010","00100","01000","11111"],
+  '3':["11111","00010","00100","00010","00001","10001","01110"],
+  '4':["00010","00110","01010","10010","11111","00010","00010"],
+  '5':["11111","10000","11110","00001","00001","10001","01110"],
+  '6':["00110","01000","10000","11110","10001","10001","01110"],
+  '7':["11111","00001","00010","00100","01000","01000","01000"],
+  '8':["01110","10001","10001","01110","10001","10001","01110"],
+  '9':["01110","10001","10001","01111","00001","00010","01100"]
+};
+
+// ── 規則 ────────────────────────────────────────────────────────
+// B3/S23。wrap=false 時邊界外一律當死細胞，給封閉的子網格用。
+function step(src, dst, w, h, wrap){
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      let n=0;
+      for(let j=-1;j<=1;j++){
+        for(let i=-1;i<=1;i++){
+          if(!i && !j) continue;
+          let xx=x+i, yy=y+j;
+          if(wrap){ xx=(xx+w)%w; yy=(yy+h)%h; }
+          else if(xx<0||yy<0||xx>=w||yy>=h) continue;
+          n += src[yy*w+xx];
+        }
+      }
+      const a = src[y*w+x];
+      dst[y*w+x] = (a ? (n===2||n===3) : n===3) ? 1 : 0;
+    }
+  }
+}
+
+// ── 數字 = 靜物 ─────────────────────────────────────────────────
+// 一個點陣亮點放大成 2×2 block，四格一組 → block 之間永遠隔 2 格。
+// 這個間距是硬需求：任何死細胞的 3×3 鄰域最多只碰得到 2 個活鄰居，
+// 生不出新細胞；block 內每格剛好 3 個鄰居，全部存活。所以數字在 B3/S23
+// 下數學上永不變形。隔 1 格就會互相催生新細胞、整個字爛掉。
+const S = 4, DW = 5*S, DH = 7*S;   // 一位數字佔 20×28 格
+const PAD = 4, SW = DW+PAD*2, SH = DH+PAD*2;   // 子網格：向外 padding 4 格
+
+const sidx = (x,y) => y*SW + x;
+
+function paintBlocks(sub, ch){
+  const g = GLYPH[ch]; if(!g) return;
+  for(let r=0;r<7;r++) for(let c=0;c<5;c++){
+    if(g[r][c] !== '1') continue;
+    for(let j=0;j<2;j++) for(let i=0;i<2;i++) sub[sidx(PAD+c*S+i, PAD+r*S+j)] = 1;
+  }
+}
+
+// 清空隙：數字區只留 block，噪點被斥力場吸走
+function clearGaps(sub, ch){
+  for(let y=0;y<DH;y++) for(let x=0;x<DW;x++) sub[sidx(PAD+x, PAD+y)] = 0;
+  paintBlocks(sub, ch);
+  return sub;
+}
+
+// 引信：在數字區的空隙帶灑隨機活細胞，block 會被鄰居干擾而崩解
+function sprinkle(sub, p){
+  for(let y=0;y<DH;y++) for(let x=0;x<DW;x++){
+    const k = sidx(PAD+x, PAD+y);
+    if(!sub[k] && Math.random()<p) sub[k] = 1;
+  }
+  return sub;
+}
+
+// 往前演化 n 代並全程錄影，回傳 n+1 幀（第 0 幀就是 seed）。倒著播就是成形動畫。
+function evolve(seed, n){
+  const out = [seed];
+  let a = seed;
+  for(let i=0;i<n;i++){
+    const b = new Uint8Array(SW*SH);
+    step(a, b, SW, SH, false);
+    out.push(b); a = b;
+  }
+  return out;
+}
+
+// ── 版面：長寬比 >= 1.25 走橫式一行，否則 HH 疊 MM ──────────────
+// 沿用既有時鐘的算法，只是每個點陣亮點佔 4×4 格，cell 邊長變成 1/4。
+const STACK_RATIO = 1.25;
+let W=0, H=0, cell=8, cols=0, rows=0, ox=0, oy=0, stack=false;
+let GW=96, GH=28, POS=[];
+const COLON_C = 46;                              // 橫式冒號的欄位（在 HH 與 MM 中間）
+
+let grid = new Uint8Array(0), next = new Uint8Array(0), pin = new Uint8Array(0);
+let pinned = [], halo = [], blocks = [], live = [], pop = 0, gen = 0;
+let runs = [];
+let want = ['','','',''], drawn = ['','','',''];
+
+const gidx = (x,y) => ((y%rows+rows)%rows)*cols + ((x%cols+cols)%cols);
+
+function commit(d, ch){
+  drawn[d] = ch;
+  document.documentElement.dataset.shown = drawn.join('');
+}
+
+function timeStr(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
+}
+
+function layout(){
+  W = cv.clientWidth; H = cv.clientHeight;
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.imageSmoothingEnabled = false;
+
+  stack = (W/H) < STACK_RATIO;
+  if(stack){
+    GW = 44; GH = 60;
+    POS = [{c:0,r:0},{c:24,r:0},{c:0,r:32},{c:24,r:32}];
+    cell = Math.min(W/(GW+12), H/(GH+28));
+  }else{
+    GW = 96; GH = 28;
+    POS = [{c:0,r:0},{c:24,r:0},{c:52,r:0},{c:76,r:0}];
+    cell = Math.min(W/(GW+20), H/(GH+44));
+  }
+  cols = Math.max(GW+4, Math.ceil(W/cell));
+  rows = Math.max(GH+4, Math.ceil(H/cell));
+  ox = Math.floor((cols-GW)/2);
+  oy = Math.floor((rows-GH)/2);
+
+  grid = new Uint8Array(cols*rows);
+  next = new Uint8Array(cols*rows);
+  pin  = new Uint8Array(cols*rows);
+  runs = [];                                   // 換版面時進行中的動畫座標全失效
+  for(let i=0;i<grid.length;i++) if(Math.random()<0.12) grid[i]=1;   // 開場 soup
+  rebuildMasks();
+  applyMasks();
+  scan();
+}
+
+// ── 斥力場 ──────────────────────────────────────────────────────
+// 背景的滑翔機會吃掉數字，所以每代 step 完強制把 block 補回來、把外圈清掉。
+// 護城河寬 2 格而不是 1 格：1 格只夠擋住入侵，擋不住「背景細胞緊貼著筆畫」，
+// 數字在細胞海裡會糊掉。2 格讓每一筆都有呼吸空間。
+function addBlock(bx, by){
+  blocks.push([bx, by]);
+  for(let j=-2;j<=3;j++) for(let i=-2;i<=3;i++){
+    const k = gidx(bx+i, by+j);
+    if(i>=0 && i<2 && j>=0 && j<2){ pinned.push(k); pin[k] = 1; } else halo.push(k);
+  }
+}
+
+function rebuildMasks(){
+  pinned = []; halo = []; blocks = []; pin.fill(0);
+  for(let d=0;d<4;d++){
+    if(runs.some(r => r.d === d)) continue;       // 正在跑 run 的那位暫時解除
+    const g = GLYPH[drawn[d]]; if(!g) continue;
+    const p = POS[d];
+    for(let r=0;r<7;r++) for(let c=0;c<5;c++)
+      if(g[r][c]==='1') addBlock(ox+p.c+c*S, oy+p.r+r*S);
+  }
+  if(!stack) for(const r of [2,4]) addBlock(ox+COLON_C, oy+r*S);
+}
+
+function applyMasks(){
+  for(let i=0;i<halo.length;i++) grid[halo[i]] = 0;
+  for(let i=0;i<pinned.length;i++) grid[pinned[i]] = 1;
+}
+
+// ── 子網格搬運 ──────────────────────────────────────────────────
+function extract(dx, dy){
+  const s = new Uint8Array(SW*SH);
+  for(let y=0;y<SH;y++) for(let x=0;x<SW;x++) s[y*SW+x] = grid[gidx(dx-PAD+x, dy-PAD+y)];
+  return s;
+}
+
+function blit(s, dx, dy){
+  for(let y=0;y<SH;y++) for(let x=0;x<SW;x++) grid[gidx(dx-PAD+x, dy-PAD+y)] = s[y*SW+x];
+}
+
+// ── 換位動畫：舊字正放炸成混沌，硬切，新字倒放長回來 ────────────
+function startRun(d, ch){
+  const dx = ox+POS[d].c, dy = oy+POS[d].r;
+  want[d] = ch;
+  if(RM){
+    blit(clearGaps(extract(dx,dy), ch), dx, dy);
+    commit(d, ch); rebuildMasks(); scan();
+    return;
+  }
+  const fwd = evolve(sprinkle(extract(dx,dy), 0.15), 12);
+  const rev = evolve(sprinkle(clearGaps(extract(dx,dy), ch), 0.15), 12).reverse();
+  const end = clearGaps(rev[rev.length-1].slice(), ch);
+  runs.push({ d, ch, dx, dy, i:0, frames: fwd.concat(rev, [end]) });
+  rebuildMasks();
+}
+
+function tick(){
+  step(grid, next, cols, rows, true);
+  const t = grid; grid = next; next = t;
+  gen++;
+
+  let done = false;
+  for(let k=runs.length-1;k>=0;k--){
+    const R = runs[k];
+    blit(R.frames[R.i], R.dx, R.dy);
+    if(R.i >= R.frames.length-1){ commit(R.d, R.ch); runs.splice(k,1); done = true; }
+    else R.i++;
+  }
+  if(done) rebuildMasks();
+  applyMasks();
+  scan();
+}
+
+// 只在世代更替時掃一次網格，畫格逐幀重畫這份清單就好。
+// 數字的 block 不進 live：它們另外用 blocks 整塊畫，才畫得出亮度差。
+function scan(){
+  live = []; pop = 0;
+  for(let i=0;i<grid.length;i++) if(grid[i]){ pop++; if(!pin[i]) live.push(i); }
+}
+
+// ── 畫面 ────────────────────────────────────────────────────────
+function draw(){
+  ctx.fillStyle = TRAIL;                         // 不 clearRect：殘影就是 CRT 的鬼影
+  ctx.fillRect(0,0,W,H);
+
+  // 背景細胞壓暗。背景自然演化出的 2×2 block 跟數字同形，同色就會把數字淹掉，
+  // 所以靠亮度分層：暗灰是細胞海，純白加光暈的才是時間。
+  const s = Math.max(1, Math.round(cell)-1);
+  ctx.fillStyle = DIM;
+  for(let k=0;k<live.length;k++){
+    const i = live[k];
+    ctx.fillRect(Math.round((i%cols)*cell), Math.round(((i/cols)|0)*cell), s, s);
+  }
+
+  ctx.fillStyle = FG;
+  ctx.shadowColor = FG;
+  ctx.shadowBlur = Math.max(6, cell*1.2);
+  const b = Math.max(2, Math.round(cell*2)-1);
+  for(let k=0;k<blocks.length;k++)              // 一次畫一整塊 2×2，光暈的成本才付得起
+    ctx.fillRect(Math.round(blocks[k][0]*cell), Math.round(blocks[k][1]*cell), b, b);
+  ctx.shadowBlur = 0;
+
+  const fs = Math.max(9, Math.round(Math.min(W,H)*0.018));
+  const pad = Math.max(10, Math.round(Math.min(W,H)*0.035));
+  ctx.fillStyle = HUD;                           // HUD 比細胞亮、比數字暗，不跟時間搶
+  ctx.font = fs+'px ui-monospace, Menlo, monospace';
+  ctx.textBaseline = 'top';
+  ctx.fillText('> CONWAY LIFE v1.0', pad, pad);
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('GEN '+gen+'  POP '+pop+'  RULE B3/S23', pad, H-pad);
+}
+
+// ── PWA ─────────────────────────────────────────────────────────
+// 被展示頁 iframe 嵌入時不註冊 sw，否則滑過去每個時鐘都會裝一份
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+// ── 啟動 ────────────────────────────────────────────────────────
+addEventListener('resize', layout);
+addEventListener('orientationchange', () => setTimeout(layout, 120));
+
+want = timeStr().split('');
+drawn = want.slice();
+document.documentElement.dataset.shown = drawn.join('');   // 首次載入不播動畫，直接定格
+layout();
+
+// 平時 1000ms 一代，畫面心跳就是秒針；換位期間全盤一起加速到 120ms
+let acc = 0, last = performance.now();
+(function frame(now){
+  const dt = Math.min(now-last, 500); last = now;
+  const t = timeStr();
+  for(let d=0;d<4;d++)
+    if(want[d] !== t[d] && !runs.some(r => r.d === d)) startRun(d, t[d]);
+
+  if(runs.length || !RM){
+    acc += dt;
+    const per = runs.length ? 120 : 1000;
+    while(acc >= per){ acc -= per; tick(); }
+  }
+  draw();
+  requestAnimationFrame(frame);
+})(last);
+})();
+</script>
+</body>
+</html>

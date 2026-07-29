@@ -1,0 +1,14 @@
+{
+  "id": "life",
+  "name": "生命遊戲",
+  "tagline": "CRT 終端機跑著康威生命遊戲，時間以永不變的靜物釘在細胞海裡",
+  "created": "2026-07-29",
+  "tags": ["cellular", "terminal", "conway"],
+  "accent": "#ffffff",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-29T10:08:00+08:00",
+    "settle": 1500
+  }
+}
