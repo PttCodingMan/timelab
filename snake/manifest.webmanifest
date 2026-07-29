@@ -1,0 +1,20 @@
+{
+  "id": "snake-clock",
+  "name": "貪食蛇時鐘",
+  "short_name": "貪食蛇",
+  "description": "數字是一條蛇的身體。換分鐘時頭沿新數字的筆順爬，尾巴從舊路徑收回，長度不夠就沿路吃。",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#c7d47a",
+  "theme_color": "#c7d47a",
+  "categories": ["utilities", "entertainment"],
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

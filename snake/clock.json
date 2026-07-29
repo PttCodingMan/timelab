@@ -1,0 +1,14 @@
+{
+  "id": "snake",
+  "name": "貪食蛇時鐘",
+  "tagline": "蛇身就是筆畫。換分鐘頭鑽出去爬成新數字，尾巴從舊路徑收回，長度不夠就沿路吃",
+  "created": "2026-07-29",
+  "tags": ["arcade", "canvas", "pwa"],
+  "accent": "#8bac0f",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-27T09:06:05+08:00",
+    "settle": 3000
+  }
+}

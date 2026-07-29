@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>貪食蛇時鐘</title>
+<meta name="description" content="數字是一條蛇的身體。換分鐘時頭沿新數字的筆順爬，尾巴從舊路徑收回，長度不夠就沿路吃。">
+<meta name="theme-color" content="#c7d47a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="貪食蛇時鐘">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<style>
+  :root{
+    --lcd:#c7d47a;
+    --ink:#2f3a10;
+    --dim:#8f9c52;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--lcd);overflow:hidden;overscroll-behavior:none}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif;
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #stage{position:fixed;inset:0;background:var(--lcd)}
+  canvas{display:block;width:100%;height:100%}
+
+  #ctrl{
+    position:fixed; right:max(16px, env(safe-area-inset-right));
+    bottom:max(16px, env(safe-area-inset-bottom));
+    display:flex; gap:8px;
+    transition:opacity 1.2s ease;
+  }
+  button{
+    font:inherit; font-size:12px; letter-spacing:.08em;
+    color:var(--ink); background:transparent; border:1px solid var(--dim);
+    padding:8px 12px; border-radius:0; cursor:pointer; touch-action:manipulation;
+  }
+  button:hover{ background:var(--dim); }
+  button:focus-visible{ outline:2px solid var(--ink); outline-offset:2px; }
+  button[aria-pressed="true"]{ border-color:var(--ink); }
+  button[hidden]{ display:none; }
+  body.rest #ctrl{ opacity:0; pointer-events:none; }
+  /* ?embed=1 — 在展示頁的 iframe 裡預覽時只留錶面 */
+  body.embed #ctrl{ display:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+</div>
+<div id="ctrl">
+  <button id="bInstall" hidden>安裝</button>
+  <button id="bWake" aria-pressed="false">防休眠</button>
+  <button id="bFull">全螢幕</button>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ── 色票：Nokia 單色 LCD。不要漸層、不要發光、不要陰影 ─────────────
+const LCD  = '#c7d47a';   // 面板底
+const OFF  = '#b8c66c';   // 沒點亮的格子：LCD 看得見的空格
+const ON   = '#2f3a10';   // 蛇身
+
+const CW = 5, CH = 9;     // 一位數字佔幾欄幾列
+const TICK = 0.08;        // 一格一拍，整段 2–3 秒跑完
+
+// ── 字形 ────────────────────────────────────────────────────────
+// 每個數字 = 一條 4-鄰接、不重複踩格的路徑，蛇才不會咬到自己 ——
+// 標準點陣字不能用（4 有分叉、8 有交叉）。路徑頭尾允許貼著自己的身體收尾，
+// 看起來就是閉合的，這是能畫出 0、6、8、9 的關鍵。
+// 3 是唯一的妥協：中間那橫折成兩格厚的小鉤才走得通（一筆畫的 3 幾何上不存在）。
+const GLYPH = {
+  0: [[0,0],[1,0],[2,0],[3,0],[4,0],[4,1],[4,2],[4,3],[4,4],[4,5],[4,6],[4,7],[4,8],
+      [3,8],[2,8],[1,8],[0,8],[0,7],[0,6],[0,5],[0,4],[0,3],[0,2],[0,1]],
+
+  1: [[0,1],[1,1],[1,0],[2,0],[2,1],[2,2],[2,3],[2,4],[2,5],[2,6],[2,7],[2,8]],
+
+  2: [[0,1],[0,0],[1,0],[2,0],[3,0],[4,0],[4,1],[4,2],[4,3],[4,4],
+      [3,4],[2,4],[1,4],[0,4],[0,5],[0,6],[0,7],[0,8],[1,8],[2,8],[3,8],[4,8]],
+
+  3: [[0,1],[0,0],[1,0],[2,0],[3,0],[4,0],[4,1],[4,2],[4,3],[4,4],
+      [3,4],[2,4],[2,5],[3,5],[4,5],[4,6],[4,7],[4,8],[3,8],[2,8],[1,8],[0,8],[0,7]],
+
+  4: [[4,8],[4,7],[4,6],[4,5],[4,4],[4,3],[4,2],[4,1],[4,0],
+      [3,0],[3,1],[2,1],[2,2],[1,2],[1,3],[0,3],[0,4],[0,5],[1,5],[2,5],[3,5]],
+
+  5: [[4,0],[3,0],[2,0],[1,0],[0,0],[0,1],[0,2],[0,3],[0,4],
+      [1,4],[2,4],[3,4],[4,4],[4,5],[4,6],[4,7],[4,8],[3,8],[2,8],[1,8],[0,8],[0,7]],
+
+  6: [[4,0],[3,0],[2,0],[1,0],[0,0],[0,1],[0,2],[0,3],[0,4],[0,5],[0,6],[0,7],[0,8],
+      [1,8],[2,8],[3,8],[4,8],[4,7],[4,6],[4,5],[4,4],[3,4],[2,4],[1,4]],
+
+  7: [[0,0],[1,0],[2,0],[3,0],[4,0],[4,1],[3,1],[3,2],[3,3],
+      [2,3],[2,4],[2,5],[1,5],[1,6],[1,7],[1,8]],
+
+  8: [[0,3],[0,2],[0,1],[0,0],[1,0],[2,0],[3,0],[4,0],[4,1],[4,2],[4,3],[4,4],
+      [3,4],[2,4],[1,4],[0,4],[0,5],[0,6],[0,7],[0,8],
+      [1,8],[2,8],[3,8],[4,8],[4,7],[4,6],[4,5]],
+
+  9: [[3,4],[2,4],[1,4],[0,4],[0,3],[0,2],[0,1],[0,0],[1,0],[2,0],[3,0],[4,0],
+      [4,1],[4,2],[4,3],[4,4],[4,5],[4,6],[4,7],[4,8],[3,8],[2,8],[1,8],[0,8]],
+};
+
+// 字形寫錯的症狀是蛇斷成兩截或咬到自己，發生在換場中途、很難回頭查是資料錯，
+// 所以載入時就當場炸掉
+for(const ch of Object.keys(GLYPH)){
+  const p = GLYPH[ch], seen = new Set();
+  for(let i=0; i<p.length; i++){
+    const [x, y] = p[i];
+    if(x < 0 || x >= CW || y < 0 || y >= CH)
+      throw new Error(`GLYPH ${ch}[${i}] (${x},${y}) 超出 ${CW}x${CH}`);
+    if(seen.has(x*CH + y))
+      throw new Error(`GLYPH ${ch}[${i}] (${x},${y}) 重複踩格`);
+    seen.add(x*CH + y);
+    if(i && Math.abs(x - p[i-1][0]) + Math.abs(y - p[i-1][1]) !== 1)
+      throw new Error(`GLYPH ${ch}[${i}] (${x},${y}) 跟前一格不是 4-鄰接`);
+  }
+}
+
+// ── 版面：整個錶面是一片格子 ──────────────────────────────────────
+let W = 0, H = 0, dpr = 1;
+let CELL = 0, PAD = 0, OX = 0, OY = 0, GW = 0, GH = 0;
+let org = [];    // 四位數字各自的格子原點
+let dots = [];   // 冒號兩顆點
+let dirty = true;
+
+function layout(){
+  W = cv.clientWidth || 1; H = cv.clientHeight || 1;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  if(W/H < 1.1){
+    // 直式：兩位一列疊起來，冒號躺在中間那條空行。橫排硬塞進窄螢幕的話
+    // 格子會被高度以外的東西夾到看不清
+    GW = 11; GH = 21;
+    org = [[0,0],[6,0],[0,12],[6,12]];
+    dots = [[4,10],[6,10]];
+  }else{
+    // [HH十 5][空 1][HH個 5][冒號 2][MM十 5][空 1][MM個 5] = 24 欄
+    GW = 24; GH = 9;
+    org = [[0,0],[6,0],[13,0],[19,0]];
+    // 冒號欄有兩欄寬，點擺在正中間 —— 差半格，全錶面只有這裡沒對齊格線
+    dots = [[11.5,2],[11.5,6]];
+  }
+  CELL = Math.min(W/(GW+2), H/(GH+2));   // 留一格寬的邊距
+  PAD = Math.max(1, CELL*0.07);          // 格與格之間的縫，像素感就靠它
+  OX = (W - GW*CELL)/2; OY = (H - GH*CELL)/2;
+  dirty = true;
+}
+
+// ── 畫 ──────────────────────────────────────────────────────────
+function box(gx, gy, col, k){
+  const s = (CELL - PAD)*(k || 1), m = (CELL - PAD - s)/2;
+  ctx.fillStyle = col;
+  ctx.fillRect(OX + gx*CELL + PAD/2 + m, OY + gy*CELL + PAD/2 + m, s, s);
+}
+
+// 頭：同色方塊，中間挖一個底色小方塊當眼睛，朝行進方向偏
+function headBox(gx, gy, dx, dy){
+  box(gx, gy, ON);
+  const s = CELL - PAD, e = s/3, o = (s - e)*0.34;
+  ctx.fillStyle = LCD;
+  ctx.fillRect(OX + gx*CELL + PAD/2 + (s-e)/2 + dx*o,
+               OY + gy*CELL + PAD/2 + (s-e)/2 + dy*o, e, e);
+}
+
+function draw(){
+  ctx.fillStyle = LCD; ctx.fillRect(0, 0, W, H);
+  for(let y=0; y<GH; y++) for(let x=0; x<GW; x++) box(x, y, OFF);
+  if(colonOn) for(const [x, y] of dots) box(x, y, ON);
+
+  for(let d=0; d<4; d++){
+    const b = bodies[d], o = org[d];
+    for(let i=0; i<b.length; i++){
+      if(i === b.length - 1){
+        const p = b[i-1];
+        headBox(o[0] + b[i][0], o[1] + b[i][1],
+                p ? b[i][0] - p[0] : 0, p ? b[i][1] - p[1] : 0);
+      }else box(o[0] + b[i][0], o[1] + b[i][1], ON);
+    }
+    const r = runs.find(x => x.d === d);
+    if(r && r.food) box(o[0] + r.food[0], o[1] + r.food[1], ON, 0.5);  // 比格子小一圈
+  }
+}
+
+// ── 狀態 ────────────────────────────────────────────────────────
+// bodies[d] 從尾到頭，順序就是字形路徑的順序 —— 換場結束時它必須「恰好等於」
+// 新字路徑，這是整座鐘唯一的收尾不變式。
+// drawn 是畫面上真的爬完的四位；runs 是正在爬的那幾位（一位最多一個）
+let bodies = [[],[],[],[]];
+let drawn = ['','','',''];
+let runs = [];
+let shown = '';
+let colonOn = true;
+
+function commit(){
+  // 四位全部畫完的那一幀才寫。換場中畫面上是扭動的曲線，不是可讀的數字
+  if(runs.length || drawn.some(c => !c)) return;
+  const s = drawn.join('');
+  if(s !== shown) document.documentElement.dataset.shown = shown = s;
+}
+
+function timeStr(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
+}
+
+// ── 路線 ────────────────────────────────────────────────────────
+const key = (x, y) => x*CH + y;
+const DIRS = [[0,-1],[1,0],[0,1],[-1,0]];
+const at = (list, c) => list.some(p => p[0] === c[0] && p[1] === c[1]);
+
+// BFS 找 a → b 的最短路（不含 a、含 b），限制在這一位自己的 5x9 區域內、
+// 不穿過蛇身。目標格自己被身體壓著也照樣當終點 —— 頭會在門口等它讓開。
+// 目標被身體整個圍死時退化成無視身體的最短路，5x9 是連通的，一定有解。
+function route(a, b, solid){
+  for(const wall of [solid, null]){
+    const prev = new Map([[key(a[0], a[1]), null]]);
+    const q = [a];
+    for(let i=0; i<q.length; i++){
+      const [x, y] = q[i];
+      if(x === b[0] && y === b[1]){
+        const out = [];
+        for(let c = b, p; (p = prev.get(key(c[0], c[1]))); c = p) out.unshift(c);
+        return out;
+      }
+      for(const [dx, dy] of DIRS){
+        const nx = x + dx, ny = y + dy, k = key(nx, ny);
+        if(nx < 0 || nx >= CW || ny < 0 || ny >= CH || prev.has(k)) continue;
+        if(wall && wall.has(k) && !(nx === b[0] && ny === b[1])) continue;
+        prev.set(k, [x, y]); q.push([nx, ny]);
+      }
+    }
+  }
+  return [];
+}
+
+// R = 過渡段 + 新字路徑。頭走完 R 的那一刻，身體就是新字。
+// 首次載入沒有舊字，R 就是整條新字路徑，蛇從長度 0 逐格長到滿。
+function build(d, body, ch, path){
+  const trans = body.length
+    ? route(body[body.length - 1], path[0], new Set(body.map(c => key(c[0], c[1])))) : null;
+  const R = trans ? trans.concat(path.slice(1)) : path.slice();
+  // 尾巴總共要收幾格是算出來的，不是配速配出來的：頭走完 R、尾巴收完這麼多，
+  // 身體剛好就是新字路徑。中途吃幾顆、等幾拍都不影響這個結果。
+  return { d, to: ch, R, hp: 0, tail: body.length + R.length - path.length,
+           m: body.length, n: path.length, acc: 0, food: null,
+           grow: Math.max(0, path.length - body.length) };
+}
+
+// 字形反過來走是同一個形狀，但手感差很多：9 → 0 挑錯頭的話，頭會沿左邊爬上去
+// 再原路折回來踩自己，卡在那裡等尾巴繞完一整圈。與其拿「起點多快讓開」這種
+// 間接指標猜，不如把兩個方向各乾跑一遍、數真正要幾拍，挑短的。
+// 一位數字才 45 格、一趟最多幾十拍，一分鐘最多算八趟，便宜得很。
+function ticksOf(run, body){
+  const r = Object.assign({}, run), b = body.slice();
+  let n = 0;
+  while(n < 400 && !tick(r, b)) n++;
+  return n;
+}
+
+function startRun(d, ch){
+  const body = bodies[d], fwd = GLYPH[ch];
+  if(!body.length) return build(d, body, ch, fwd);
+  let best = null;
+  for(const p of [fwd, fwd.slice().reverse()]){
+    const r = build(d, body, ch, p), n = ticksOf(r, body);
+    if(!best || n < best.n) best = { r, n };
+  }
+  return best.r;
+}
+
+function tick(run, body){
+  const R = run.R;
+  let cut = 1;
+
+  if(run.hp < R.length){
+    const nx = R[run.hp];
+    const eat = run.food && run.food[0] === nx[0] && run.food[1] === nx[1];
+    // 吃到食物那一拍尾巴不收，所以尾巴那格還不會讓開
+    const skip = (!eat && run.tail > 0) ? 1 : 0;
+    if(at(body.slice(skip), nx)){
+      // 下一格還被自己壓著：原地等一拍，尾巴照收。身體變短，那格遲早空出來 ——
+      // 一定會通、不會死鎖，代價是等掉的長度要再吃回來
+      run.grow++;
+    }else{
+      body.push(nx); run.hp++;
+      if(eat){ run.food = null; run.grow--; cut = 0; }
+      else{
+        // 身長從舊字長度線性走到新字長度。要變短的時候尾巴偶爾連收兩格
+        const want = run.n + (run.m - run.n)*(R.length - run.hp)/R.length;
+        if(body.length - want >= 1.5) cut = 2;
+      }
+    }
+  }
+
+  cut = Math.min(cut, run.tail, body.length - 1);
+  for(let i=0; i<cut; i++){ body.shift(); run.tail--; }
+
+  // 還需要更長就在頭前方 3–5 格放一顆，場上最多一顆
+  if(run.grow > 0 && !run.food)
+    for(const k of [3, 2, 4]){
+      const c = R[run.hp + k];
+      if(c && !at(body, c)){ run.food = c; break; }
+    }
+
+  return run.hp >= R.length && run.tail === 0;
+}
+
+// ── 推進 ────────────────────────────────────────────────────────
+function snap(d, ch){
+  bodies[d] = GLYPH[ch].map(c => c.slice());
+  drawn[d] = ch;
+  dirty = true;
+}
+
+// 只有數字真的變了的那一位會動。時間又跳了就把手上那位直接定案再重爬，
+// 這樣連跳好幾分鐘也收斂得回來，不會卡在舊值
+function sync(){
+  const t = timeStr();
+  for(let d=0; d<4; d++){
+    const i = runs.findIndex(r => r.d === d);
+    if(i >= 0){
+      if(runs[i].to === t[d]) continue;
+      snap(d, runs[i].to); runs.splice(i, 1);
+    }
+    if(drawn[d] === t[d]) continue;
+    if(RM) snap(d, t[d]);
+    else runs.push(startRun(d, t[d]));
+  }
+}
+
+let last = 0;
+function frame(now){
+  const dt = Math.min((now - last)/1000, 0.25); last = now;
+  sync();
+  for(let i=runs.length-1; i>=0; i--){
+    const r = runs[i];
+    r.acc += dt;
+    while(r.acc >= TICK){
+      r.acc -= TICK; dirty = true;
+      if(tick(r, bodies[r.d])){ drawn[r.d] = r.to; runs.splice(i, 1); break; }
+    }
+  }
+  // 秒由冒號負責，蛇不管秒
+  const on = (Date.now() % 1000) < 500;
+  if(on !== colonOn){ colonOn = on; dirty = true; }
+  commit();
+  if(dirty){ dirty = false; draw(); }
+  requestAnimationFrame(frame);
+}
+
+// ── 控制 ────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const bWake = $('bWake'), bFull = $('bFull'), bInstall = $('bInstall');
+
+bFull.onclick = () => {
+  if(document.fullscreenElement) document.exitFullscreen();
+  else $('stage').requestFullscreen?.();
+};
+
+let wl = null, keepAwake = false;
+async function setWake(on){
+  keepAwake = on;
+  bWake.setAttribute('aria-pressed', String(on));
+  try{
+    if(on && 'wakeLock' in navigator){ wl = await navigator.wakeLock.request('screen'); }
+    else if(wl){ await wl.release(); wl = null; }
+  }catch(_){}
+}
+bWake.onclick = () => setWake(!keepAwake);
+document.addEventListener('visibilitychange', () => {
+  if(keepAwake && document.visibilityState === 'visible') setWake(true);
+});
+
+let deferred = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; bInstall.hidden = false; });
+bInstall.onclick = async () => {
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice;
+  deferred = null; bInstall.hidden = true;
+};
+addEventListener('appinstalled', () => { bInstall.hidden = true; });
+
+let restTimer = null;
+function wake(){
+  document.body.classList.remove('rest');
+  clearTimeout(restTimer);
+  restTimer = setTimeout(() => document.body.classList.add('rest'), 3000);
+}
+['pointermove','pointerdown','keydown','touchstart'].forEach(ev => addEventListener(ev, wake, {passive:true}));
+wake();
+
+let rz = null;
+addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(layout, 150); });
+
+// 被展示頁 iframe 嵌入時不註冊 sw、不留控制列
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+// 四位都還是空的，第一次 sync() 就會替每一位開一輪 —— 開場動畫不必特別寫
+layout();
+last = performance.now();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
