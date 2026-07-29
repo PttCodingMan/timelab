@@ -89,12 +89,15 @@ const TILT = 0.012;       // 整片沙略帶斜度
 // 分鐘跳完後第 3 秒就查 dataset.shown，動畫沒收完那次就算沒過。
 const T_ERASE = 1.0;      // 抹平
 const T_DRAW  = 1.5;      // 耙出新字
-const T_LIFT  = 0.12;     // 筆與筆之間提耙的停頓，從 T_DRAW 裡扣，總長不變
+const T_FADE  = 0.10;     // 耙子進出場的淡入淡出：硬切會讀成「憑空冒出來」
+const LINK_FAST = 2.0;    // 牽絲比筆畫走得快幾倍：筆離開紙面那段本來就快
 
 // 固定種子的偽亂數：末端偏移每幀都要算出同一個值，否則會出現鬼影
 const hash = n => { const s = Math.sin(n * 127.1) * 43758.5453; return s - Math.floor(s); };
 const jit = n => hash(n) - 0.5;
 const smooth = t => t*t*(3-2*t);
+// 一段動畫兩端的不透明度：進場淡入、退場淡出，中間全實
+const fade = (t, dur) => Math.max(0, Math.min(1, t/T_FADE, (dur-t)/T_FADE));
 
 // 圈的顏色先跟沙底混好再畫：沿輪廓的圈是一圈蓋一圈的，用半透明疊會越往內越髒
 const SANDV = [221,214,195];    // = SAND
@@ -267,6 +270,19 @@ let polys = {};            // 取樣結果照「位置+字元」存著，layout 
 // 把一個數字取樣成折線，順便算累積長度 —— 畫虛線時每小段要接上一段的相位，
 // 不然每小段都從實線頭開始。控制點帶固定種子的抖動：同一個數字出現在兩個
 // 位置不會長得一模一樣，但同一個位置每幀都算出同一組點。
+// 折線配上累積長度與每點切線。切線取前後兩條弦的方向：只拿當下那條弦的話
+// 角度是階梯函數，橫木會凍住再猛甩，看起來像掉幀
+function meta(pts){
+  const L = [0];
+  for(let i=1;i<pts.length;i++)
+    L.push(L[i-1] + Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
+  const A = pts.map((_, i) => {
+    const a = pts[Math.max(0, i-1)], b = pts[Math.min(pts.length-1, i+1)];
+    return Math.atan2(b[1]-a[1], b[0]-a[0]);
+  });
+  return { pts, L, A, len: L[L.length-1] || 1 };
+}
+
 function poly(d, ch, b){
   const key = d + ch;
   if(polys[key]) return polys[key];
@@ -284,10 +300,7 @@ function poly(d, ch, b){
         pts.push([A*a[0]+B*c1[0]+C*c2[0]+D*e[0], A*a[1]+B*c1[1]+C*c2[1]+D*e[1]]);
       }
     }
-    const L = [0];
-    for(let i=1;i<pts.length;i++)
-      L.push(L[i-1] + Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
-    out.push({ pts, L, len: L[L.length-1] || 1 });
+    out.push(meta(pts));
   }
   return polys[key] = out;
 }
@@ -401,13 +414,14 @@ const glyph = (d, ch, dst) => { const b = boxes[d];
 // face=true 是工作面（耙出），false 是翻過來的平背板（推平）。
 // 沒有齒：齒要同時「不跟橫木共線、不朝上、方向不突跳」在數學上做不到 ——
 // 把方向映到下半平面本來就不連續，拿掉齒問題就不存在
-function rake(x, y, ang, span, hand, face){
+function rake(x, y, ang, span, hand, face, al){
   const ux = Math.cos(ang), uy = Math.sin(ang), nx = -uy, ny = ux;
   const half = span/2, e = Math.min(span*0.13, F*0.019);
   // 兩個呼叫點是同一根木頭：厚度只跟 F 走，抹平那支只是橫木更長
   const th = e*3.2, hw = e*1.8;   // 柄拉長後 1.5 太細像牙籤，加粗一階才撐得住長度
   const ls = ux*LX + uy*LY >= 0 ? 1 : -1;      // 橫木哪一面迎光，亮暗邊照這個放
   ctx.save();
+  ctx.globalAlpha = al;
   ctx.shadowColor = 'rgba(110,100,84,.32)';
   ctx.shadowBlur = span*0.16;
   ctx.shadowOffsetX = -LX*span*0.06; ctx.shadowOffsetY = -LY*span*0.06;   // 影子落在背光側
@@ -487,17 +501,49 @@ function cellOf(b){ return region(b.x + b.w/2, b.y + b.h/2); }
 // ── 耙出：耙頭沿筆順拖過沙面，走到哪那幾道溝就長到哪 ──────────────────
 // 進度沿弧長推進：總時長按每筆長度分配，筆內 ease-in-out（起筆慢中段快），
 // 筆與筆之間提耙。回傳的 s 是正在耙的那一筆，null 表示耙子離開沙面。
-function along(sp, t){
-  let total = 0; for(const s of sp) total += s.len;
-  const draw = T_DRAW - T_LIFT*(sp.length-1);
-  let acc = 0;
-  for(let i=0; i<sp.length; i++){
-    const dur = draw*sp[i].len/total;
-    if(t < acc+dur) return { i, s: sp[i], covered: sp[i].len*smooth((t-acc)/dur) };
-    acc += dur + T_LIFT;
-    if(t < acc) return { i: i+1, s: null, covered: 0 };
+// 牽絲：順著上一筆的收筆方向出去，再順著下一筆的起筆方向進來。直線接的話
+// 兩端各折一次，讀起來是「把耙子搬過去」而不是「寫過去」
+function link(a, b){
+  const p = ptAt(a, a.len), n = ptAt(b, 0);
+  const d = Math.hypot(n.x-p.x, n.y-p.y)*0.42;   // 控制點拉出去的長度，太長會繞一大圈
+  const c1x = p.x + Math.cos(p.ang)*d, c1y = p.y + Math.sin(p.ang)*d;
+  const c2x = n.x - Math.cos(n.ang)*d, c2y = n.y - Math.sin(n.ang)*d;
+  const pts = [[p.x, p.y]];
+  for(let s=1, N=SEG*2; s<=N; s++){
+    const t = s/N, m = 1-t, A = m*m*m, B = 3*m*m*t, C = 3*m*t*t, D = t*t*t;
+    pts.push([A*p.x + B*c1x + C*c2x + D*n.x, A*p.y + B*c1y + C*c2y + D*n.y]);
   }
-  return { i: sp.length, s: null, covered: 0 };
+  return meta(pts);
+}
+
+// 一個字接成一條連續的路：筆畫、牽絲、筆畫……耙子從頭到尾不停，只有走在
+// 筆畫上時才刻出溝。ease 套在整條路上（不是每一筆各自起停），才有一口氣
+// 寫完的感覺。carve 是這一段要不要留下溝、i 是它算第幾筆
+function chain(sp){
+  const seq = [];
+  for(let i=0; i<sp.length; i++){
+    seq.push({ i, s: sp[i], carve: true, w: sp[i].len });
+    if(i+1 < sp.length){
+      const lk = link(sp[i], sp[i+1]);
+      seq.push({ i: i+1, s: lk, carve: false, w: lk.len/LINK_FAST });
+    }
+  }
+  return seq;
+}
+
+function along(sp, t){
+  const seq = sp.seq || (sp.seq = chain(sp));
+  let W = 0; for(const g of seq) W += g.w;
+  const u = W*smooth(Math.min(t/T_DRAW, 1));
+  let acc = 0;
+  for(let k=0; k<seq.length; k++){
+    const g = seq[k];
+    if(u < acc + g.w || k === seq.length-1){
+      const f = Math.min(1, (u-acc)/g.w);
+      return { i: g.i, s: g.s, u: f*g.s.len, done: g.carve ? f*g.s.len : 0 };
+    }
+    acc += g.w;
+  }
 }
 
 // 弧長 u 落在哪一小段：位置給耙頭，切線給橫桿的方向
@@ -505,7 +551,8 @@ function ptAt(s, u){
   let i = 1; while(i < s.L.length-1 && s.L[i] < u) i++;
   const a = s.pts[i-1], b = s.pts[i];
   const k = (u - s.L[i-1])/Math.max(1e-6, s.L[i]-s.L[i-1]);
-  return { x: a[0]+(b[0]-a[0])*k, y: a[1]+(b[1]-a[1])*k, ang: Math.atan2(b[1]-a[1], b[0]-a[0]) };
+  const da = ((s.A[i] - s.A[i-1] + Math.PI*3) % (Math.PI*2)) - Math.PI;   // 走短邊，不繞一圈
+  return { x: a[0]+(b[0]-a[0])*k, y: a[1]+(b[1]-a[1])*k, ang: s.A[i-1] + da*k };
 }
 
 function trace(c, s){
@@ -529,7 +576,7 @@ function carve(d, ch, cl, sp, a){
   // 帶得出畫在字外的沙脊（偏移量 d）就夠寬了，再寬會把交叉的下一筆先透出來
   mc.lineWidth = PENW*F + Math.max(2, F*0.019)*2 + 2;
   for(let i=0; i<=a.i && i<sp.length; i++){
-    const got = i === a.i ? a.covered : sp[i].len;   // 這一筆已經耙出的長度
+    const got = i === a.i ? a.done : sp[i].len;      // 這一筆已經耙出的長度
     if(got < 0.5) break;
     const cur = got < sp[i].len - 0.5;          // 走完的那筆要圓頭，才帶得出收筆的圓端
     mc.lineCap = cur ? 'butt' : 'round';        // 進行中那筆用平頭，圓頭會讓溝比耙頭先冒出半個線寬
@@ -564,16 +611,16 @@ function repaint(r){
       ctx.beginPath(); ctx.rect(cl.x, yy, cl.w, Math.max(0, cl.y+cl.h-yy)); ctx.clip();
       glyph(d, run.from);
       ctx.restore();
-      rake(cl.x + cl.w/2, yy, Math.PI/2, cl.w, cl.w*0.75, false);
+      rake(cl.x + cl.w/2, yy, Math.PI/2, cl.w, cl.w*0.75, false, fade(run.t, T_ERASE));
       continue;
     }
     const sp = poly(d, run.to, boxes[d]), a = along(sp, Math.min(run.t, T_DRAW));
     carve(d, run.to, cl, sp, a);
-    if(!a.s) continue;                          // 提耙停頓：耙子不在沙面上
-    const p = ptAt(a.s, a.covered), sd = seed(d, run.to), span = PENW*F*1.9;
+    const p = ptAt(a.s, a.u);                   // 筆畫上或牽絲上，耙子都在
+    const sd = seed(d, run.to), span = PENW*F*1.9;
     const x = p.x + wob(run.t, sd)*F*0.010, y = p.y + wob(run.t, sd+7)*F*0.010;
     const ang = p.ang + wob(run.t, sd+13)*0.10;
-    rake(x, y, ang, span, span*1.7, true);      // 耙頭只有筆畫厚度那一級，不是整格寬
+    rake(x, y, ang, span, span*1.7, true, fade(run.t, T_DRAW));  // 耙頭只有筆畫厚度那一級，不是整格寬
   }
   ctx.restore();
 }
