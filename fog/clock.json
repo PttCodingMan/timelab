@@ -1,0 +1,14 @@
+{
+  "id": "fog",
+  "name": "霧玻璃時鐘",
+  "tagline": "呵一口氣把玻璃糊掉，指尖擦出現在幾點，霧再爬回來吃掉",
+  "created": "2026-07-29",
+  "tags": ["fog", "canvas", "pwa"],
+  "accent": "#cfe3ee",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-29T21:34:00+08:00",
+    "settle": 5050
+  }
+}

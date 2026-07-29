@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>霧玻璃時鐘</title>
+<meta name="description" content="呵一口氣把玻璃糊掉，指尖沿筆順擦出現在幾點，霧再慢慢從邊緣爬回來把字吃掉。">
+<meta name="theme-color" content="#0a0e14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="霧玻璃時鐘">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<style>
+  :root{
+    --ink:#0a0e14;
+    --text:#c2d2dd;
+    --line:#3d4c58;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--ink);overflow:hidden;overscroll-behavior:none}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif;
+    color:var(--text);
+    -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #stage{position:fixed;inset:0;background:var(--ink)}
+  /* touch-action:none —— 手指放在玻璃上是要擦字，不是要捲頁面 */
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+
+  #ctrl{
+    position:fixed; right:max(16px, env(safe-area-inset-right));
+    bottom:max(16px, env(safe-area-inset-bottom));
+    display:flex; gap:8px;
+    transition:opacity 1.2s ease;
+  }
+  button{
+    font:inherit; font-size:12px; letter-spacing:.08em;
+    color:var(--text); background:transparent; border:1px solid var(--line);
+    padding:8px 12px; border-radius:2px; cursor:pointer; touch-action:manipulation;
+  }
+  button:hover{ background:var(--line); }
+  button:focus-visible{ outline:2px solid var(--text); outline-offset:2px; }
+  button[aria-pressed="true"]{ border-color:var(--text); }
+  button[hidden]{ display:none; }
+  body.rest #ctrl{ opacity:0; pointer-events:none; }
+  /* ?embed=1 — 在展示頁的 iframe 裡預覽時只留錶面 */
+  body.embed #ctrl{ display:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+</div>
+<div id="ctrl">
+  <button id="bInstall" hidden>安裝</button>
+  <button id="bWake" aria-pressed="false">防休眠</button>
+  <button id="bFull">全螢幕</button>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// ── 色票 ────────────────────────────────────────────────────────
+// 夜窗的暗。夜色是一道漸層不是一塊純黑：天上冷、靠地面被燈染亮，
+// 擦開的筆畫從此不是死黑（CSS 的 --ink / theme-color 仍是原本那個 #0a0e14）
+const SKY_HI = '#05080f', SKY_LO = '#0d1620';
+// 白紗改成垂直漸層。原本一個定值 alpha 正是整張變成一片平灰的元凶；
+// 窗戶下半部本來就結得厚，上緣薄到透得出夜色。色溫也拉開：夜色冷藍、霧偏暖白
+// LO 停在 .80 而不是全糊：下緣的街燈要透得出光暈，糊到全白就只剩一塊死白
+const VEIL_HI = 'rgba(206,220,236,.22)';
+const VEIL_MD = 'rgba(238,236,229,.58)';
+const VEIL_LO = 'rgba(255,250,240,.80)';
+const GLOW = ['255,176,96','120,190,255','143,214,168'];    // 暖橘街燈、冷藍窗光、綠號誌
+// 數字那一帶刻意擺三盞，x 對著第 1、3、4 位數字 —— 擦開的筆畫裡要露得出顏色，
+// 不能只露出一條黑。[x, y, r, 色, 峰值 alpha]，x/y 乘畫布、r 乘短邊。
+// 顏色比 GLOW 濃、alpha 反而更低：要的是「暗處的有色光」，不是把筆畫刷白 ——
+// 光斑同時拉亮霧面和筆畫，但霧面只吃到 (1-veil) 那份，所以光斑愈亮字愈糊。
+// 橘、綠的視亮度天生比藍高（0.299R+0.587G），alpha 要壓得比藍低才不會把字洗掉
+const LAMPS = [
+  [0.20, 0.44, 0.34, '255,124,26',  0.38],
+  [0.53, 0.57, 0.30, '60,150,255',  0.56],
+  [0.83, 0.40, 0.27, '80,205,165',  0.38],
+];
+
+// ── 一分鐘的節奏（秒）────────────────────────────────────────────
+const T_BREATH = 1.3;     // 呵氣：一團霧從下緣中央漲開蓋滿，舊字一起被埋
+const T_DIGIT  = 0.90;    // 一位數字擦完。從 0.62 拉長是因為手指要在轉角停下來 ——
+                          // 等速走完的筆跡沒有節奏，慢下來的那幾拍才讀得出是手寫的
+const T_GAP    = 0.06;    // 字與字之間
+const T_WRITE  = 3.90;    // 四位加間隔是 3.78，尾巴 0.12 留給冒號那兩點
+const T_HOLD   = 1.5;     // 寫完停住讓人看完。畫面真正靜止的是第 5.08–6.70 秒，
+                          // clock.json 的 settle 要讓「整張截圖」落在裡面 —— 截一張 2x 的圖
+                          // 要花快半秒，而快門比 settle 還晚 0.59 秒（networkidle 那段），
+                          // 所以 settle 抓 5050，量到的快門是 5.64–6.17 秒，兩頭各留半秒。
+                          // 上限是 tools/simulate.js 的六秒收斂視窗，總長 5.20 秒還在裡面
+const TICK     = 2.5;     // 霧往內爬一步的間隔。爬一步現在改的是整條漸層帶的濃淡，
+                          // 不再只是把邊界往內削，所以間隔要比 3 秒再短一點：
+                          // 同樣的總長分成更多步，每步的濃度差才看不出是階梯
+
+// ── 版面（比例，乘 F＝字高）─────────────────────────────────────
+const DW = 0.60, GAP = 0.16, MID = 0.30;   // 字寬、字距、冒號那一格
+const U  = 4*DW + 2*GAP + MID;             // 一整排總共佔幾個 F
+
+// ── 手感 ────────────────────────────────────────────────────────
+const BRUSH = 0.22;       // 指腹寬（乘 F）。指腹十幾 mm 配上一個手掌高的數字就是這個量級。
+                          // 上一版 0.12 配收尖的筆鋒畫出來是漂亮的鋼筆線 —— 那正是手指不會有的東西
+// 沿筆長的粗細。指腹按下去、抬起來都會留下一個略胖的頭，中段反而輕。
+// 壓力造成的粗細變化留著，但最粗最細只差兩成：收尖的是筆，不是手指
+const prof = t => 1 - 0.17*Math.sin(Math.PI*Math.pow(t, 0.85));
+const INK   = 0.24;       // 一枚指腹的擦除力道。沿路疊九枚才擦掉八成 —— 指腹擦不乾淨，
+                          // 痕跡裡本來就留著一層沒擦掉的霧。這個值是「看得出擦不乾淨」跟
+                          // 「別留太多 α 給爬回的增益放大」之間的折衷
+const RIB   = 7;          // 指紋把指腹橫切成幾條
+const RIBD  = 0.48;       // 最深那條壓掉多少擦除力道
+const RIDGE = 0.75;       // 水脊推白的力道。要夠猛才推得到不透明，帶子本身是被 mask 乘過的
+const WOB   = 0.14;       // 黏滑：路徑沿法線的低頻擺動（乘刷寬）。手指在濕玻璃上不是滑順的
+const CREEP = 0.0127;     // 每 tick 的 blur 半徑（乘 F），F=630 時約 8 個裝置像素。
+                          // 舊值 0.003 配自疊三次，等於「糊一點點、再把中間值狠狠推回不透明」，
+                          // 邊界每 tick 都被重新削尖，看起來只是筆畫變細。改成糊得寬、推得輕
+const GAIN  = 0.25;       // 自疊的第二筆用多少 alpha，等效指數落在 1.25 附近。
+                          // 別想靠把它調到接近 0 來放慢：那樣 8 bit 的 mask 每 tick 進位不到 1，
+                          // 字會停在原地不動。要慢是靠 blur 放大＋這個放小一起來
+const SLANT = 0.085;      // 整排往右倒，右手寫字本來就這樣。倒得比原本兇一點才不呆板
+const JIT   = 0.032;      // 控制點的抖動：手指在玻璃上比耙子在沙上抖
+const SEG   = 7;          // 每段貝茲切幾小段
+
+// ── 手寫的節奏 ──────────────────────────────────────────────────
+// 轉角偵測照抄 zen（commit 21aaedc）：折線是貝茲取樣出來的，逐點角差都很小，
+// 要在 ±CORNER_WIN 的弧長視窗裡累積才看得出彎
+const CORNER_WIN = 0.055;
+// 算一個彎的門檻（弧度，約 89°）。zen 用 1.75，這裡放寬是因為兩邊的取樣密度不同：
+// fog 一個字格只有二十幾個折線點，同一個視窗蓋到的角差本來就小一截 ——
+// 3 中間那個真的折角在這裡只量到 1.66，用 1.75 會整個字一個彎都抓不到
+const CORNER_MIN = 1.55;
+const CORNER_GAP = 0.18;  // 兩個極大值靠得比這近就併成一個（佔筆畫長度）
+const PIVOT_T = 0.18;     // 每個轉角（含提筆換下一筆）停住的秒數
+const CURV  = 4.0;        // 曲率把「走這一小段要花多少時間」乘貴幾倍：進彎自己減速、出彎才加速回來
+// 停得久就多壓幾枚（擦得更乾淨）、走得快就少壓（滑過去漏擦）。以中位速為零點加減，
+// 所以整條痕跡的平均力道跟沒有速度曲線之前一樣，只有快慢兩頭被拉開
+const GRIND = 0.45;
+const FATT  = 0.12;       // 停得久的地方順便撐寬幾成：停留＝反覆磨那一點
+// 慣性曲線：兩端的斜率是零（smoothstep 只是連續、斜率不為零），所以起步推不動、收尾提早鬆勁
+const glide = t => t*t*t*(t*(t*6-15)+10);
+// glide 的反函數沒有解析解，二分十四次就夠 —— 一個字的時間表只算一次，之後都是查表
+const unglide = y => { let a=0, b=1;
+  for(let i=0;i<14;i++){ const m=(a+b)/2; if(glide(m) < y) a=m; else b=m; }
+  return (a+b)/2; };
+const wrap = a => ((a + Math.PI*3) % (Math.PI*2)) - Math.PI;
+
+// 固定種子的偽亂數。光斑座標、刷痕抖動全走這支，全檔不碰瀏覽器內建的亂數 ——
+// 縮圖每次 CI 重拍，背景要是每次長得不一樣，thumbnail 的 diff 會被雜訊洗版
+function mul32(a){
+  return () => {
+    a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+// 抖動要照 key 查、不是照呼叫順序取，所以每次拿整數當種子重開一支
+const hash = n => mul32(Math.imul(n*1000 | 0, 2246822519))();
+const jit = n => hash(n) - 0.5;
+
+// ── 手寫數字（照抄 zen/index.html 的 PATHS）──────────────────────
+// 十個數字各 1–3 筆，每筆是一條三次貝茲鏈：頭兩個數是起點，之後每六個數
+// 接一段（c1, c2, 終點），座標在 0..1 的字格裡（x 往右、y 往下，1 = 基線）。
+// 這 repo 明講各作品不共用程式碼，複製一份是對的，不要抽共用檔。
+const PATHS = {
+ '0':[[0.55,0.06, 0.31,0.05,0.14,0.24,0.14,0.50, 0.14,0.78,0.29,0.97,0.49,0.97,
+       0.70,0.97,0.87,0.77,0.87,0.49, 0.87,0.25,0.73,0.06,0.53,0.05]],
+ // 1 / 4 / 7 的直筆原本畫得太準，配上收尖的筆鋒反而更像尺畫的。
+ // 主幹全部帶一點外凸的弧，收筆處往內收 —— 手寫的豎不會是鉛垂線
+ '1':[[0.20,0.30, 0.31,0.24,0.43,0.14,0.55,0.05, 0.60,0.30,0.55,0.66,0.47,0.97]],
+ '2':[[0.13,0.27, 0.17,0.10,0.40,0.02,0.60,0.07, 0.83,0.13,0.90,0.35,0.71,0.54,
+       0.55,0.69,0.32,0.81,0.13,0.95, 0.40,1.00,0.65,0.98,0.90,0.92]],
+ '3':[[0.14,0.17, 0.25,0.04,0.57,0.01,0.72,0.12, 0.86,0.22,0.79,0.41,0.51,0.48,
+       0.83,0.49,0.93,0.69,0.81,0.85, 0.67,0.99,0.31,1.00,0.12,0.86]],
+ '4':[[0.52,0.04, 0.41,0.25,0.23,0.49,0.05,0.71, 0.34,0.74,0.64,0.71,0.96,0.66],
+      [0.81,0.28, 0.79,0.52,0.76,0.76,0.69,0.99]],
+ '5':[[0.25,0.07, 0.21,0.21,0.18,0.35,0.17,0.46, 0.42,0.36,0.76,0.41,0.86,0.63,
+       0.93,0.84,0.58,1.01,0.13,0.89],
+      [0.24,0.08, 0.44,0.05,0.64,0.04,0.86,0.06]],
+ '6':[[0.82,0.05, 0.58,0.10,0.28,0.28,0.19,0.52, 0.10,0.78,0.16,0.98,0.40,0.99,
+       0.64,1.00,0.86,0.87,0.84,0.68, 0.82,0.50,0.48,0.42,0.20,0.62]],
+ '7':[[0.10,0.09, 0.36,0.03,0.63,0.04,0.90,0.06, 0.78,0.33,0.60,0.66,0.40,0.97]],
+ '8':[[0.62,0.04, 0.38,0.01,0.20,0.12,0.22,0.26, 0.24,0.38,0.38,0.44,0.48,0.50,
+       0.62,0.58,0.86,0.62,0.87,0.76, 0.88,0.94,0.60,1.03,0.40,0.96,
+       0.19,0.89,0.09,0.72,0.22,0.63, 0.32,0.55,0.42,0.53,0.48,0.50,
+       0.60,0.44,0.80,0.38,0.80,0.24, 0.80,0.11,0.72,0.01,0.59,0.05]],
+ '9':[[0.84,0.32, 0.84,0.14,0.68,0.02,0.50,0.04, 0.30,0.06,0.14,0.20,0.16,0.36,
+       0.18,0.52,0.42,0.60,0.60,0.54, 0.74,0.49,0.82,0.42,0.84,0.33,
+       0.86,0.58,0.74,0.84,0.44,0.98]]
+};
+
+// 折線配上累積長度：擦拭要沿弧長等距蓋刷子，照點數走不行 —— 貝茲取樣的點疏密不一。
+// 切線也要：指紋的條紋得沿著行進方向躺下去，所以每一枚指腹都得先轉到當下的走向
+// 每點的切線另外存一份：轉角是靠「這一小段跟前一小段差多少度」找出來的，
+// 用前後兩條弦取方向（只拿當下那條的話角度是階梯函數，彎會偵測在錯的點上）
+function meta(pts){
+  const L = [0];
+  for(let i=1;i<pts.length;i++)
+    L.push(L[i-1] + Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
+  const A = pts.map((_, i) => {
+    const a = pts[Math.max(0, i-1)], b = pts[Math.min(pts.length-1, i+1)];
+    return Math.atan2(b[1]-a[1], b[0]-a[0]);
+  });
+  return { pts, L, A, len: L[L.length-1] || 1 };
+}
+
+let polys = {};            // 取樣結果照「位置+字元」存著，layout 時清掉
+function poly(d, ch){
+  const key = d + ch;
+  if(polys[key]) return polys[key];
+  const b = boxes[d], sd = d*7 + ch.charCodeAt(0), out = [];
+  for(const st of PATHS[ch]){
+    const P = k => {
+      const u = st[k] + jit(k*2.7 + sd)*JIT, v = st[k+1] + jit(k*3.3 + sd)*JIT;
+      return [b.x + u*b.w + (1-v)*SLANT*b.h, b.y + v*b.h];
+    };
+    const pts = [P(0)];
+    for(let k=0; k+8 <= st.length; k+=6){
+      const a = P(k), c1 = P(k+2), c2 = P(k+4), e = P(k+6);
+      for(let s=1; s<=SEG; s++){
+        const t = s/SEG, m = 1-t, A = m*m*m, B = 3*m*m*t, C = 3*m*t*t, D = t*t*t;
+        pts.push([A*a[0]+B*c1[0]+C*c2[0]+D*e[0], A*a[1]+B*c1[1]+C*c2[1]+D*e[1]]);
+      }
+    }
+    out.push(meta(pts));
+  }
+  return polys[key] = out;
+}
+
+// 切線取折線那一小段的方向，不跨段算 —— 跨到下一筆的起點會轉出一個假的方向
+function ptAt(s, u){
+  let i = 1; while(i < s.L.length-1 && s.L[i] < u) i++;
+  const a = s.pts[i-1], b = s.pts[i];
+  const k = Math.min(1, Math.max(0, (u - s.L[i-1])/Math.max(1e-6, s.L[i]-s.L[i-1])));
+  const dx = b[0]-a[0], dy = b[1]-a[1], d = Math.hypot(dx, dy) || 1;
+  return [a[0]+dx*k, a[1]+dy*k, dx/d, dy/d];
+}
+// 一個字的幾筆串成一條弧長：走完一筆直接跳下一筆的起點，中間不留刷痕（提筆）。
+// 後兩個回傳值是「這一筆自己走到幾成」跟「離這一筆的頭尾還有幾 px」——
+// 胖頭要落在每一筆的頭尾，不是整個字的頭尾
+function at(sp, u){
+  for(let i=0;i<sp.length;i++){
+    if(u <= sp[i].len || i === sp.length-1){
+      const q = ptAt(sp[i], u), L = sp[i].len;
+      q.push(Math.min(1, Math.max(0, u/L)), Math.max(0, Math.min(u, L-u)));
+      return q;
+    }
+    u -= sp[i].len;
+  }
+}
+
+// 轉角：窗內累積轉角取局部極大值，過門檻才算一個彎，靠太近的兩個併成一個 ——
+// 不然同一個彎會被拆成好幾次停頓。貼著頭尾的彎不算：那裡本來就要起筆／提筆。
+// 順手把整條 tn（每點的窗內轉角）留著，段內的減速直接拿它當曲率用
+function corners(s){
+  if(s.co) return s.co;
+  const n = s.pts.length, win = CORNER_WIN*s.len, tn = [], ta = [];
+  const psi = [0], abs = [0];
+  for(let i=1;i<n;i++){
+    const w = wrap(s.A[i]-s.A[i-1]);
+    psi.push(psi[i-1] + w); abs.push(abs[i-1] + Math.abs(w));
+  }
+  for(let i=0;i<n;i++){
+    let a = i, b = i;
+    while(a > 0 && s.L[i]-s.L[a] < win) a--;
+    while(b < n-1 && s.L[b]-s.L[i] < win) b++;
+    // 淨轉角拿來找折角（S 形的兩個彎會互相抵消，那本來就不算一個折角）；
+    // 總轉角拿來算這一小段有多難走 —— 3 中間那個 S，一正一反剛好抵消成零，
+    // 用淨轉角算的話那裡會變成整個字最便宜、跑最快的地方，剛好反了
+    tn.push(Math.abs(psi[b]-psi[a]));
+    ta.push(abs[b]-abs[a]);
+  }
+  s.tn = tn; s.ta = ta;
+  const out = [];
+  for(let i=1;i<n-1;i++){
+    if(tn[i] < CORNER_MIN || tn[i] < tn[i-1] || tn[i] < tn[i+1]) continue;
+    if(s.L[i] < win || s.len - s.L[i] < win) continue;
+    const p = out[out.length-1];
+    if(p && s.L[i] - p.u < CORNER_GAP*s.len){ if(tn[i] > p.k){ p.u = s.L[i]; p.k = tn[i]; } continue; }
+    out.push({ u: s.L[i], k: tn[i] });
+  }
+  return s.co = out;
+}
+
+// 一個字的時間表：把「走一段 → 轉角停一下 → 再走一段」接起來，每段兩端的速度都是零。
+// 段內也不是等速，曲率高的地方每一小步都算得比較貴，所以進彎會自己慢下來。
+// 回傳每一枚指腹該在第幾秒蓋下去（t），跟它在那裡待得比中位速慢多少（k，-1 快到底、+1 慢到底）。
+// 慢的那些要擦得更乾淨也略寬 —— 只改「走多快」而痕跡長得一樣，等於沒做
+function beat(sp){
+  if(sp.tm) return sp.tm;
+  const ph = [];
+  let base = 0;
+  for(let i=0;i<sp.length;i++){
+    const s = sp[i];
+    let u0 = 0;
+    for(const c of corners(s)){
+      ph.push({ s, o: base, a: base+u0, b: base+c.u }); ph.push({ hold:1 });
+      u0 = c.u;
+    }
+    ph.push({ s, o: base, a: base+u0, b: base+s.len });
+    base += s.len;
+    if(i+1 < sp.length) ph.push({ hold:1 });   // 提筆換筆畫也是一次停頓
+  }
+
+  let np = 0, sum = 0;
+  for(const p of ph){
+    if(p.hold){ np++; continue; }
+    p.n0 = Math.ceil(p.a/STEP - 1e-9); p.n1 = Math.floor(p.b/STEP + 1e-9);
+    p.c = [0];
+    for(let n = p.n0+1; n <= p.n1; n++){
+      const s = p.s, u = n*STEP - p.o;
+      let j = 1; while(j < s.L.length-1 && s.L[j] < u) j++;
+      // 平方不是線性：3 那種整條都在彎的字，線性只把整個字一起放慢（等於沒放慢），
+      // 要的是「最急的那個彎特別慢」，所以急彎跟緩彎之間得拉開
+      p.c.push(p.c[p.c.length-1] + 1 + CURV*s.ta[j]*s.ta[j]);
+    }
+    p.W = p.c[p.c.length-1]; sum += p.W;
+  }
+  // 停頓吃固定秒數，剩下的按代價分給移動段。彎多的字也要留一半以上的時間在走，
+  // 不然整個字讀起來是一格一格跳過去的
+  const mt = Math.max(T_DIGIT*0.55, T_DIGIT - np*PIVOT_T);
+  for(const p of ph) p.dur = p.hold ? (T_DIGIT-mt)/np : (sum ? mt*p.W/sum : 0);
+
+  const t = [];
+  let t0 = 0;
+  for(const p of ph){
+    if(!p.hold)
+      for(let k=0; k<p.c.length; k++)
+        t[p.n0+k] = t0 + p.dur*unglide(p.W ? p.c[k]/p.W : 0);
+    t0 += p.dur;
+  }
+  // 相位是接續切的，理論上不會有洞；真漏了一格會讓那個字停在半路，補一行保險
+  for(let n=1; n<t.length; n++) if(t[n] === undefined) t[n] = t[n-1];
+
+  // 快慢一律拿「這個字的中位速」當基準，而且取對數：比最快那一枚的話，
+  // 3 那種整條都在彎的字每一枚都比它慢十幾倍，全部擠在同一個值上就分不出轉角了。
+  // 中位那一枚剛好是 0（力道跟沒改之前一樣），慢一倍 +0.5、快一倍 -0.5
+  const dw = t.map((v, n) => Math.max(1e-6, (n+1 < t.length ? t[n+1] : v) - v));
+  if(t.length > 1) dw[t.length-1] = dw[t.length-2];
+  const dm = [...dw].sort((a, b) => a - b)[dw.length >> 1];
+  return sp.tm = { t, k: dw.map(v => Math.max(-1, Math.min(1, Math.log2(v/dm)/2))) };
+}
+
+// ── 四張離屏 canvas ──────────────────────────────────────────────
+// 霧玻璃的關鍵是「霧的地方是模糊的背景，不是白色半透明貼片」：同一張背景畫兩份，
+// 一份清楚一份模糊，mask 的 alpha 決定哪裡露哪份（白＝有霧、透明＝已擦乾淨）。
+// 擦、呵氣、爬回全都只是對 mask 做加減，其餘程式碼一行都不用知道發生什麼事。
+let bgSharp = null, bgFog = null, mask = null, scr = null, HEADLESS = true;
+let body = null, flank = null, dot = null;   // 指腹的三枚 sprite，見 makePads()
+
+// 模擬環境只有 id='c' 那張 canvas 有 getContext，createElement 出來的沒有。
+// 任一張開不出來就設 HEADLESS，繪圖整條路徑跳過，狀態機照跑
+function mk(w, h){
+  const e = document.createElement('canvas');
+  const g = e.getContext && e.getContext('2d');
+  if(!g) return null;
+  e.width = w; e.height = h;
+  return { e, g };
+}
+
+// ── 版面 ────────────────────────────────────────────────────────
+// 整份程式都用裝置像素算：離屏跟主畫布同尺寸、drawImage 一比一貼，而且 ctx.filter
+// 的 blur 半徑本來就是裝置像素 —— 混用 CSS px 會讓爬回速度隨螢幕密度變
+let W=0, H=0, MW=0, MH=0, dpr=1, F=0, BR=0, STEP=0;
+let boxes=[], colon=null, BX=0, BY=0, BREATH_R=0;
+
+function layout(){
+  W = cv.clientWidth || 1; H = cv.clientHeight || 1;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  MW = Math.round(W*dpr); MH = Math.round(H*dpr);
+  cv.width = MW; cv.height = MH;
+
+  // 直式改用寬度定字高。後面再夾一次寬度：窄視窗照原式子算會把四位擠出畫面
+  F = Math.min(MH > MW ? 0.34*MW : 0.30*Math.min(MW, MH*1.4), MW*0.88/U);
+  // 格子要照最細的地方訂（prof 最小 0.83），照最粗的訂會讓輕的那一段變成一串沒接起來的圓點
+  BR = BRUSH*F/2; STEP = BR*0.22;
+  const bw = DW*F, y = (MH - F)/2;
+  let x = (MW - U*F)/2;
+  boxes = [];
+  const put = () => { boxes.push({ x, y, w:bw, h:F }); x += bw; };
+  put(); x += GAP*F; put(); x += MID*F/2;
+  colon = { x, y: y + F/2 };
+  x += MID*F/2; put(); x += GAP*F; put();
+
+  // 呵氣的原點在畫面下緣中央；半徑撐到最遠的角落還在實心區內（漸層 0.5 之前全白）
+  BX = MW/2; BY = MH*1.02;
+  BREATH_R = Math.hypot(MW/2, BY)*2.1;
+
+  polys = {};
+  bgSharp = mk(MW, MH); bgFog = mk(MW, MH); mask = mk(MW, MH); scr = mk(MW, MH);
+  makePads();
+  HEADLESS = !(bgSharp && bgFog && mask && scr && body && flank && dot);
+  if(!HEADLESS){ paintBg(); paintFog(); seal(); }
+  runs.length = 0; drawn = ''; dirty = true;   // 進場與 resize 之後走同一套，不特別處理
+}
+
+// ── 背景：夜窗的光斑，只在 layout 時畫一次 ────────────────────────
+function paintBg(){
+  const b = bgSharp.g, rnd = mul32(20260729), R = Math.min(MW, MH);
+  b.globalCompositeOperation = 'source-over';
+  const sky = b.createLinearGradient(0, 0, 0, MH);
+  sky.addColorStop(0, SKY_HI); sky.addColorStop(1, SKY_LO);
+  b.fillStyle = sky; b.fillRect(0, 0, MW, MH);
+
+  // 中間那個 stop 比線性飽滿（0.4 處給 0.72a，線性只有 0.6a），光暈才鋪得開，
+  // 一整個字都在光裡而不是只有中心一小點有顏色
+  const lamp = (x, y, r, col, a) => {
+    const g = b.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0,    'rgba(' + col + ',' + a + ')');
+    g.addColorStop(0.40, 'rgba(' + col + ',' + a*0.72 + ')');
+    g.addColorStop(1,    'rgba(' + col + ',0)');
+    b.fillStyle = g; b.fillRect(x-r, y-r, r*2, r*2);
+  };
+  for(const L of LAMPS) lamp(L[0]*MW, L[1]*MH, L[2]*R, L[3], L[4]);
+  for(let i=0;i<12;i++){
+    // 底部密、上方疏 —— 街燈都在下面。次方 <1 會把取樣往 1 那頭推
+    const x = rnd()*MW, fy = 0.16 + 0.86*Math.pow(rnd(), 0.42);
+    const r = R*(0.12 + rnd()*0.24), a = 0.34 + rnd()*0.38;
+    // 數字那一帶的顏色由 LAMPS 三盞統一負責。隨機街燈再疊上去就是兩三盞壓在同一個
+    // 字上、把筆畫一起洗亮（第 1 位的局部對比因此掉到 67），落在帶內的一律砍到四成
+    lamp(x, fy*MH, r, GLOW[Math.floor(rnd()*GLOW.length)], fy > 0.74 ? a : a*0.4);
+  }
+}
+
+function paintFog(){
+  const f = bgFog.g;
+  f.globalCompositeOperation = 'source-over';
+  // 先鋪一層底：blur 會從畫布外採到透明，四個邊會露出底下這份。墊清楚的那張
+  // 而不是一塊單色 —— 夜色已經是漸層，墊死色會在下緣壓出一圈暗邊
+  f.drawImage(bgSharp.e, 0, 0);
+  f.filter = 'blur(' + (18*dpr) + 'px)';
+  f.drawImage(bgSharp.e, 0, 0);
+  f.filter = 'none';
+  const v = f.createLinearGradient(0, 0, 0, MH);
+  v.addColorStop(0, VEIL_HI); v.addColorStop(0.45, VEIL_MD); v.addColorStop(1, VEIL_LO);
+  f.fillStyle = v; f.fillRect(0, 0, MW, MH);
+}
+
+// ── 遮罩：白＝有霧、透明＝已擦乾淨 ────────────────────────────────
+// 封面停在 .90 不是 1：水脊要靠「比周圍更白」才看得出來，封死在 1 就沒地方可推了。
+// 用 copy 不是 source-over —— source-over 只能往上加，蓋不回上一分鐘爬滿的那面
+function seal(){
+  const m = mask.g;
+  m.globalCompositeOperation = 'copy';
+  m.fillStyle = 'rgba(255,255,255,.90)'; m.fillRect(0, 0, MW, MH);
+  m.globalCompositeOperation = 'source-over';
+}
+
+// ── 指腹 ────────────────────────────────────────────────────────
+// 兩枚離屏 sprite，蓋章前都會轉到行進方向：
+// body 是擦掉的本體（destination-out），沿 y 軸切成 RIB 條 —— 指腹有紋路，抹過去
+// 擦不乾淨，痕跡裡是沿走向的長條紋。條紋值只取一次、整支程式共用：同一根手指的
+// 紋路本來就固定，每筆重抽就變成雜點了。
+// flank 是被推到兩側的水脊，中央 |y|<R 一律 0：本體擦開的地方一滴白都不能補
+function makePads(){
+  const R = Math.max(2, Math.round(BR)), S = R*2, S6 = R*6;
+  body = mk(S, S); flank = mk(S6, S6); dot = mk(S, S);
+  if(!body || !flank || !dot) return;
+
+  const b = body.g, gy = b.createLinearGradient(0, 0, 0, S);
+  for(let j=0;j<=RIB;j++){
+    // 單雙數交替壓一次深的，剖面才保證有起伏；亂數只決定每條深淺
+    const k = (j % 2 ? 0.55 : 0.05) + 0.45*hash(j*17.3 + 5);
+    gy.addColorStop(j/RIB, 'rgba(255,255,255,' + (INK*(1 - RIBD*k)).toFixed(4) + ')');
+  }
+  b.fillStyle = gy; b.fillRect(0, 0, S, S);
+  // 再乘一層圓的衰減：中心最清楚、越靠邊擦得越淺，起收筆也才是鈍的圓頭。
+  // 實心撐到 0.65 才收 —— 收太早就是筆鋒
+  b.globalCompositeOperation = 'destination-in';
+  const gr = b.createRadialGradient(R, R, R*0.65, R, R, R);
+  gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  b.fillStyle = gr; b.fillRect(0, 0, S, S);
+
+  // 冒號是直接壓兩下的鈍點，沒有行進方向，就不該有沿行進方向的紋路 ——
+  // 拿 body 蓋出來的兩顆是印著橫條碼的藥丸。同一枚指腹的軟邊圓，把條紋拿掉而已
+  const t = dot.g, tr = t.createRadialGradient(R, R, R*0.5, R, R, R);
+  tr.addColorStop(0, 'rgba(255,255,255,' + INK + ')');
+  tr.addColorStop(1, 'rgba(255,255,255,0)');
+  t.fillStyle = tr; t.fillRect(0, 0, S, S);
+
+  const f = flank.g, fy = f.createLinearGradient(0, 0, 0, S6);
+  // 由內往外：|y|<R 全 0（本體）、1.25R 最濃、1.55R 就散乾淨。
+  // 上一版鋪到 2.6R，沿路十幾枚疊上去整條帶子都推到不透明，讀起來是一團罩住整個字的
+  // 光暈（鋪出去快一個字寬），不是水脊。指腹推起來的水就是緊貼筆畫邊的一條細亮線
+  for(const s of [[0,0],[0.2417,0],[0.2917,RIDGE],[0.3333,0],
+                  [0.6667,0],[0.7083,RIDGE],[0.7583,0],[1,0]])
+    fy.addColorStop(s[0], 'rgba(255,255,255,' + s[1] + ')');
+  f.fillStyle = fy; f.fillRect(0, 0, S6, S6);
+  f.globalCompositeOperation = 'destination-in';
+  const fx = f.createLinearGradient(0, 0, S6, 0);
+  for(const s of [[0,0],[0.3,0],[0.4333,1],[0.5667,1],[0.7,0],[1,0]])
+    fx.addColorStop(s[0], 'rgba(0,0,0,' + s[1] + ')');
+  f.fillStyle = fx; f.fillRect(0, 0, S6, S6);
+}
+
+// 蓋一枚指腹。(dx,dy) 是當下的行進方向，指紋的條紋跟著轉；pad 不給就用帶指紋的本體。
+// wear 是這一點總共壓幾枚（含小數，最後那一枚用 alpha 補）：一路滑過去的地方左右都有
+// 鄰居疊上來，頭尾只有一邊有，不補的話兩端會自己淡成尖尾 —— 那又變回筆了。
+// 手指按下去、抬起來本來就比較重，停著磨的地方也是
+function stamp(x, y, r, dx, dy, wear, pad){
+  const a = Math.atan2(dy, dx), m = mask.g, s = scr.g, p = pad || body;
+  m.save();
+  m.globalCompositeOperation = 'destination-out';
+  m.translate(x, y); m.rotate(a);
+  for(let e = wear; e > 0; e--){
+    m.globalAlpha = Math.min(1, e); m.drawImage(p.e, -r, -r, r*2, r*2);
+  }
+  m.restore();
+
+  // 水脊一枚一枚貼，不攢一幀再貼：攢起來的話「這一幀刷了幾枚」會改變疊出來的結果，
+  // 縮圖就不決定性了（連兩次 shoot 的 bytes 不一樣）。整段夾在 clip 裡，
+  // 不然 destination-in 會去掃整張畫布，一枚指腹的代價變成一張全螢幕
+  const R3 = r*3;
+  const x0 = Math.max(0, Math.floor(x - R3)), y0 = Math.max(0, Math.floor(y - R3));
+  const w = Math.min(MW, Math.ceil(x + R3)) - x0, h = Math.min(MH, Math.ceil(y + R3)) - y0;
+  if(w <= 0 || h <= 0) return;
+  s.save();
+  s.beginPath(); s.rect(x0, y0, w, h); s.clip();
+  s.globalCompositeOperation = 'source-over';
+  s.clearRect(x0, y0, w, h);
+  s.translate(x, y); s.rotate(a); s.drawImage(flank.e, -R3, -R3, R3*2, R3*2);
+  // 貼回去之前拿 mask 自己乘兩次：擦乾淨的地方 α 只剩兩成，平方之後連半成都不到，
+  // 轉角刷子回頭掃到也補不進去 —— 這正是上一版「痕跡內部留了非零 α、被爬回的增益
+  // 推回全霧」踩過的坑，乘一次還不夠保險
+  s.setTransform(1, 0, 0, 1, 0, 0);
+  s.globalCompositeOperation = 'destination-in';
+  s.drawImage(mask.e, x0, y0, w, h, x0, y0, w, h);
+  s.drawImage(mask.e, x0, y0, w, h, x0, y0, w, h);
+  s.restore();
+  m.globalCompositeOperation = 'source-over';
+  m.drawImage(scr.e, x0, y0, w, h, x0, y0, w, h);
+}
+
+// ── 霧從邊緣往內爬 ──────────────────────────────────────────────
+// blur 把擦痕邊界拉成一條漸層帶，再疊一次把中間值往不透明推一點。
+// 疊三次（α = 1-(1-α)³）推得太狠：每 tick 都把剛糊開的邊界重新削尖，
+// 所以舊版看起來是「等寬的筆畫慢慢變細、邊緣始終銳利」。
+// 現在 blur 半徑放大四倍、推的力道只剩四分之一，那條帶就糊得開，
+// 而且寬到足以從兩側同時滲進筆畫中央 —— 中央的 alpha 跟著整體回升，
+// 字是被霧化掉的，不是被削細的。帶子本身照樣一步一步往內推，不會停在原地
+function creep(){
+  const s = scr.g, m = mask.g;
+  s.globalCompositeOperation = 'source-over';
+  s.clearRect(0, 0, MW, MH);
+  s.filter = 'blur(' + (CREEP*F) + 'px)';
+  s.drawImage(mask.e, 0, 0);
+  s.filter = 'none';
+  m.globalCompositeOperation = 'source-over';
+  m.clearRect(0, 0, MW, MH);
+  m.drawImage(scr.e, 0, 0);
+  m.globalAlpha = GAIN; m.drawImage(scr.e, 0, 0); m.globalAlpha = 1;
+  // blur 會從畫布外採到透明，連續跑一分鐘會把四個邊的霧啃掉一圈。每 tick 補回去。
+  // 補的這一圈要有 4 個 σ 寬，不然 blur 的尾巴照樣從圈內側把霧吸走
+  const e = Math.max(8*dpr, 4*CREEP*F);
+  m.strokeStyle = '#fff'; m.lineWidth = e;
+  m.strokeRect(e/2, e/2, MW-e, MH-e);
+}
+
+// ── 狀態 ────────────────────────────────────────────────────────
+// runs 這個名字是硬性的：tools/simulate.js 的探針直接讀 runs.length。
+// 爬回不算 run（它從不結束），所以檢查點永遠是 0
+let drawn = '', runs = [], cut = [0,0,0,0], idle = 0, acc = 0, dirty = true;
+
+function commit(){ document.documentElement.dataset.shown = drawn; }
+
+function timeStr(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
+}
+
+function start(to){
+  runs.length = 0;
+  runs.push({ to, t: 0, sealed: 0, dot: 0 });
+  cut = [0,0,0,0];
+}
+
+function breathe(t){
+  const k = Math.min(t/T_BREATH, 1), r = Math.max(1, BREATH_R*k*k);  // 先慢後快，像一口氣噴出來
+  const m = mask.g;
+  m.globalCompositeOperation = 'source-over';
+  const g = m.createRadialGradient(BX, BY, r*0.5, BX, BY, r);
+  g.addColorStop(0, 'rgba(255,255,255,.9)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  m.fillStyle = g; m.fillRect(0, 0, MW, MH);
+}
+
+// 刷子沿弧長走一個固定格子，第 n 枚永遠蓋在 n*STEP 上，而且一枚只蓋一次。
+// 不釘格子的話「這一幀推進多少」就決定了刷在哪，兩次截圖差幾個像素，縮圖的 bytes 就不穩。
+// 走多快只決定「第 n 枚什麼時候蓋下去」，蓋在哪一格永遠不變 —— 決定性就是靠這件事
+function write(r){
+  for(let d=0; d<4; d++){
+    const el = r.t - T_BREATH - d*(T_DIGIT+T_GAP);
+    if(el <= 0) continue;
+    const sp = poly(d, r.to[d]), tm = beat(sp);
+    let n = cut[d];
+    while(n < tm.t.length && tm.t[n] <= el){
+      // 黏滑：沿弧長低頻擺一下，寬度也跟著起伏。手指在濕玻璃上是黏一下滑一下，
+      // 不是等速滑過去。頻率用弧長算，不同數字才不會擺在同一個位置
+      const u = n*STEP, q = at(sp, u), k = tm.k[n], w = Math.sin(u/F*11 + 1.7)*WOB*BR;
+      stamp(q[0] - q[3]*w, q[1] + q[2]*w,
+            BR*prof(q[4])*(1 + 0.07*Math.sin(u/F*19))*(1 + FATT*k), q[2], q[3],
+            // 停留＝反覆磨那一點，擦得更乾淨也略寬；走得快的地方滑過去、擦得淺。
+            // 另外一個半刷寬之內算頭尾，補的份量收成平方 —— 線性的話離端點半個刷寬處
+            // 兩邊鄰居本來就疊滿了，再補就補過頭，反而在頭尾內側擦出一段特別深的
+            1 + GRIND*k + Math.pow(Math.max(0, 1 - q[5]/(BR*1.5)), 2));
+      n++;
+    }
+    cut[d] = n;
+  }
+  if(!r.dot && r.t >= T_BREATH + 4*T_DIGIT + 3*T_GAP){
+    r.dot = 1;   // 冒號是兩下手指戳的，不是筆畫；戳是壓住不動，所以一口氣壓五枚
+    for(const s of [-1, 1]) stamp(colon.x, colon.y + s*F*0.16, BR*0.85, 1, 0, 5, dot);
+  }
+}
+
+function step(r, dt){
+  r.t += dt;
+  if(!HEADLESS){
+    if(r.t < T_BREATH) breathe(r.t);
+    else{
+      if(!r.sealed){ r.sealed = 1; seal(); }    // 呵完氣把整面封死，角落才不會漏出上一分鐘的字
+      write(r);
+    }
+  }
+  dirty = true;
+  // 數字真的擦出來的那一刻才回報，不提早寫
+  if(r.t >= T_BREATH + T_WRITE){ drawn = r.to; runs.length = 0; commit(); idle = 0; acc = 0; }
+}
+
+function rest(dt){
+  idle += dt;
+  if(idle < T_HOLD) return;                     // 停住：不爬，讓人把時間看完
+  acc += dt;
+  while(acc >= TICK){ acc -= TICK; if(!HEADLESS) creep(); dirty = true; }
+}
+
+// 每幀三次 drawImage，沒有 per-pixel JS
+function render(){
+  if(HEADLESS) return;
+  const s = scr.g;
+  ctx.drawImage(bgSharp.e, 0, 0);
+  s.globalCompositeOperation = 'source-over';
+  s.clearRect(0, 0, MW, MH);
+  s.drawImage(bgFog.e, 0, 0);
+  s.globalCompositeOperation = 'destination-in';
+  s.drawImage(mask.e, 0, 0);
+  s.globalCompositeOperation = 'source-over';
+  ctx.drawImage(scr.e, 0, 0);
+}
+
+let last = 0;
+function frame(now){
+  const dt = Math.min((now - last)/1000, 0.12); last = now;
+  const t = timeStr();
+  const r = runs[0];
+  // 時間變了就吃掉最新目標、手上那輪直接重跑，不排隊 —— 連跳好幾分鐘也會收斂
+  if(t !== (r ? r.to : drawn)) start(t);
+  else if(r) step(r, dt);
+  else rest(dt);
+  // 一分鐘裡有五十幾秒畫面是靜止的（或一秒才動一次），沒變就別重貼三張全螢幕
+  if(dirty){ render(); dirty = false; }
+  requestAnimationFrame(frame);
+}
+
+// ── 互動：手指拖過去就擦一道，之後照樣被霧吃回去 ────────────────────
+let px = 0, py = 0, down = false;
+function drag(x, y){
+  if(HEADLESS) return;
+  const L = Math.hypot(x-px, y-py), n = Math.max(1, Math.ceil(L/STEP));
+  const mv = L > 0.5;                           // 手指按著不動就是在壓，多壓幾枚才擦得掉
+  const dx = mv ? (x-px)/L : 1, dy = mv ? (y-py)/L : 0;
+  // 真人的手速不套那條速度曲線 —— 那是拿來演「寫字」的，這裡的快慢是使用者自己的
+  for(let i=1;i<=n;i++) stamp(px + (x-px)*i/n, py + (y-py)*i/n, BR*0.95, dx, dy, mv ? 1 : 3);
+  px = x; py = y; dirty = true;
+}
+addEventListener('pointerdown', e => { down = true; px = e.clientX*dpr; py = e.clientY*dpr; drag(px, py); });
+addEventListener('pointermove', e => { if(down) drag(e.clientX*dpr, e.clientY*dpr); });
+addEventListener('pointerup', () => { down = false; });
+addEventListener('pointercancel', () => { down = false; });
+
+// ── 控制 ────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const bWake = $('bWake'), bFull = $('bFull'), bInstall = $('bInstall');
+
+bFull.onclick = () => {
+  if(document.fullscreenElement) document.exitFullscreen();
+  else $('stage').requestFullscreen?.();
+};
+
+let wl = null, keepAwake = false;
+async function setWake(on){
+  keepAwake = on;
+  bWake.setAttribute('aria-pressed', String(on));
+  try{
+    if(on && 'wakeLock' in navigator){ wl = await navigator.wakeLock.request('screen'); }
+    else if(wl){ await wl.release(); wl = null; }
+  }catch(_){}
+}
+bWake.onclick = () => setWake(!keepAwake);
+document.addEventListener('visibilitychange', () => {
+  if(keepAwake && document.visibilityState === 'visible') setWake(true);
+});
+
+let deferred = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; bInstall.hidden = false; });
+bInstall.onclick = async () => {
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice;
+  deferred = null; bInstall.hidden = true;
+};
+addEventListener('appinstalled', () => { bInstall.hidden = true; });
+
+let restTimer = null;
+function wake(){
+  document.body.classList.remove('rest');
+  clearTimeout(restTimer);
+  restTimer = setTimeout(() => document.body.classList.add('rest'), 3000);
+}
+['pointermove','pointerdown','keydown','touchstart'].forEach(ev => addEventListener(ev, wake, {passive:true}));
+wake();
+
+let rz = null;
+addEventListener('resize', () => {
+  clearTimeout(rz);
+  rz = setTimeout(layout, 150);
+});
+
+// 被展示頁 iframe 嵌入時不註冊 sw、不留控制列
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+layout();
+last = performance.now();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
