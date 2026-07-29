@@ -87,6 +87,9 @@ def main() -> None:
                 viewport={"width": shot["width"], "height": shot["height"]},
                 device_scale_factor=2,
                 color_scheme="dark",
+                # 時鐘畫的是 getHours()，也就是瀏覽器當地時間。freeze 帶著 +08:00，
+                # 不釘時區的話 CI（UTC）會拍成 01:06，本機（台北）才是 09:06
+                timezone_id="Asia/Taipei",
             )
             page.add_init_script(FREEZE.replace("__FREEZE__", shot["freeze"]))
             page.goto(f"{base}/{c['id']}/?embed=1", wait_until="networkidle")
