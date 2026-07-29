@@ -133,6 +133,10 @@ const targets = args[0]
       .map(d => path.join(d, 'index.html'));
 
 function p2(n) { return String(n).padStart(2, '0'); }
+// 等畫面收斂的上限。最長的一次換字是 zen 的抹平 1.4 s + 耙出 2.6 s = 4.0 s，
+// 這裡取 4000 的 1.5 倍當餘裕 —— 要驗的是「時鐘會收斂到牆上時間」，
+// 不是「動畫要在某個固定秒數內收完」。動畫真的卡住的話還是等不到。
+const SETTLE_MAX = 4000 * 1.5;
 let fails = 0;
 let html = '';
 
@@ -145,14 +149,22 @@ function run(title, opts, minutes, extra) {
     env.advance(60000);
     if (extra) extra(env, i);
     env.advance(7000);
-    // 期望值一律從模擬器自己的牆上時間取，不要自己累加，否則會飄
-    const t = new Date(env.wall());
-    const wantStr = p2(t.getUTCHours()) + p2(t.getUTCMinutes());
-    const p = env.peek();
+    // 一輪往前推 67 秒，判定點對分鐘邊界的相位每輪飄 7 秒，總有一次會剛好落在
+    // 動畫還沒收完的時候 —— 那是取樣相位的巧合，不是時鐘壞了。所以改成輪詢到
+    // 收斂為止。期望值一律從模擬器自己的牆上時間取，而且每一圈都重取：
+    // 輪詢期間可能跨過分鐘邊界，在迴圈外算一次會拿到過期的期望值。
+    let wantStr, p, waited = 0;
+    for (;;) {
+      const t = new Date(env.wall());
+      wantStr = p2(t.getUTCHours()) + p2(t.getUTCMinutes());
+      p = env.peek();
+      if (p.drawn === wantStr || waited >= SETTLE_MAX) break;
+      env.advance(500); waited += 500;
+    }
     const ok = p.drawn === wantStr;
     if (!ok) fails++;
     if (!ok || i < 3 || i === minutes - 1)
-      console.log(`  ${ok ? 'PASS' : 'FAIL'}  第 ${i + 1} 分  期望 ${wantStr}  畫面 ${p.drawn}  殘留 run ${p.runs}`);
+      console.log(`  ${ok ? 'PASS' : 'FAIL'}  第 ${i + 1} 分  期望 ${wantStr}  畫面 ${p.drawn}  殘留 run ${p.runs}  等了 ${waited} ms`);
   }
   console.log(`  ${minutes} 分鐘跑完，殘留 run ${env.peek().runs}`);
 }
