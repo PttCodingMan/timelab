@@ -33,6 +33,7 @@ function makeEnv(html, opts = {}) {
     classList: { add: noop, remove: noop, contains: () => false },
     setAttribute: noop, getAttribute: () => null,
     appendChild: noop, removeChild: noop, remove: noop, prepend: noop,
+    replaceChildren(...n) { this.textContent = n.map(String).join(''); },
     querySelector: () => mkEl('x'), querySelectorAll: () => [],
     addEventListener: noop, removeEventListener: noop,
     requestFullscreen: () => Promise.resolve(),
@@ -66,7 +67,10 @@ function makeEnv(html, opts = {}) {
     matchMedia: () => ({ matches: false, addEventListener: noop }),
     getComputedStyle: () => ({ getPropertyValue: () => '#888888' }),
     location: { protocol: 'http:', search: '' },
-    navigator: { serviceWorker: undefined },
+    // language + localStorage：各頁的語言判定要用。給 en-US 且 getItem 回 null，
+    // 等於「英文瀏覽器第一次造訪」，讓模擬真的跑過 i18n 那條分支而不是繞過它
+    navigator: { serviceWorker: undefined, language: 'en-US' },
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
     requestAnimationFrame: (cb) => { timers.push({ at: vnow + 16.67, cb: () => cb(vnow), raf: true, id: tid }); return tid++; },
     setTimeout: (cb, ms = 0) => { timers.push({ at: vnow + ms, cb, id: tid }); return tid++; },
     clearTimeout: (id) => { const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); },
