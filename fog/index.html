@@ -154,6 +154,10 @@ const INK   = 0.24;       // 一枚指腹的擦除力道。沿路疊九枚才擦
                           // 「別留太多 α 給爬回的增益放大」之間的折衷
 const RIB   = 7;          // 指紋把指腹橫切成幾條
 const RIBD  = 0.48;       // 最深那條壓掉多少擦除力道
+const SKEW  = 0.5;        // 指紋相對行進方向歪掉的最大角度（弧度），沿弧長慢慢擺。
+                          // 不歪的話每一枚的相位一模一樣，band k 永遠落在離中線同樣遠的地方，
+                          // 沿曲線疊起來就是一圈一圈貼著中線走的等高線 —— 那是等高線圖，
+                          // 不是抹痕。手指滑過去本來就會微微滾動，接觸面跟著換，紋路才會交錯
 const RIDGE = 0.75;       // 水脊推白的力道。要夠猛才推得到不透明，帶子本身是被 mask 乘過的
 const WOB   = 0.14;       // 黏滑：路徑沿法線的低頻擺動（乘刷寬）。手指在濕玻璃上不是滑順的
 const CREEP = 0.0127;     // 每 tick 的 blur 半徑（乘 F），F=630 時約 8 個裝置像素。
@@ -162,6 +166,8 @@ const CREEP = 0.0127;     // 每 tick 的 blur 半徑（乘 F），F=630 時約 
 const GAIN  = 0.25;       // 自疊的第二筆用多少 alpha，等效指數落在 1.25 附近。
                           // 別想靠把它調到接近 0 來放慢：那樣 8 bit 的 mask 每 tick 進位不到 1，
                           // 字會停在原地不動。要慢是靠 blur 放大＋這個放小一起來
+const SEAL  = 0.90;       // 封面的霧濃度。停在 .90 不是 1：水脊要靠「比周圍更白」才看得出來，
+                          // 封死在 1 就沒地方可推了
 const SLANT = 0.085;      // 整排往右倒，右手寫字本來就這樣。倒得比原本兇一點才不呆板
 const JIT   = 0.032;      // 控制點的抖動：手指在玻璃上比耙子在沙上抖
 const SEG   = 7;          // 每段貝茲切幾小段
@@ -175,14 +181,18 @@ const CORNER_WIN = 0.055;
 // 3 中間那個真的折角在這裡只量到 1.66，用 1.75 會整個字一個彎都抓不到
 const CORNER_MIN = 1.55;
 const CORNER_GAP = 0.18;  // 兩個極大值靠得比這近就併成一個（佔筆畫長度）
-const PIVOT_T = 0.18;     // 每個轉角（含提筆換下一筆）停住的秒數
-const CURV  = 4.0;        // 曲率把「走這一小段要花多少時間」乘貴幾倍：進彎自己減速、出彎才加速回來
+const PIVOT_T = 0.08;     // 每個轉角（含提筆換下一筆）停住的秒數。0.18 那版讓 mt 撞到 0.55 的地板，
+                          // 等於 T_DIGIT 的四成五完全不動，剩下的路只好用衝的補回來 ——
+                          // 停頓是節奏，不是暫停鍵
+const CURV  = 1.5;        // 曲率把「走這一小段要花多少時間」乘貴幾倍：進彎自己減速、出彎才加速回來
 // 停得久就多壓幾枚（擦得更乾淨）、走得快就少壓（滑過去漏擦）。以中位速為零點加減，
 // 所以整條痕跡的平均力道跟沒有速度曲線之前一樣，只有快慢兩頭被拉開
 const GRIND = 0.45;
 const FATT  = 0.12;       // 停得久的地方順便撐寬幾成：停留＝反覆磨那一點
-// 慣性曲線：兩端的斜率是零（smoothstep 只是連續、斜率不為零），所以起步推不動、收尾提早鬆勁
-const glide = t => t*t*t*(t*(t*6-15)+10);
+// 慣性曲線：兩端的斜率是零，所以起步推不動、收尾提早鬆勁。用 smoothstep 而不是 zen 那條
+// smootherstep —— 兩條的端點斜率都是零，差在中段的尖峰速度（1.5 倍 vs 1.875 倍均速）。
+// fog 的刷痕是一枚一枚蓋出來的，尖峰再高就是一幀跳過一整個指腹，中間空一段
+const glide = t => t*t*(3-2*t);
 // glide 的反函數沒有解析解，二分十四次就夠 —— 一個字的時間表只算一次，之後都是查表
 const unglide = y => { let a=0, b=1;
   for(let i=0;i<14;i++){ const m=(a+b)/2; if(glide(m) < y) a=m; else b=m; }
@@ -355,9 +365,10 @@ function beat(sp){
     for(let n = p.n0+1; n <= p.n1; n++){
       const s = p.s, u = n*STEP - p.o;
       let j = 1; while(j < s.L.length-1 && s.L[j] < u) j++;
-      // 平方不是線性：3 那種整條都在彎的字，線性只把整個字一起放慢（等於沒放慢），
-      // 要的是「最急的那個彎特別慢」，所以急彎跟緩彎之間得拉開
-      p.c.push(p.c[p.c.length-1] + 1 + CURV*s.ta[j]*s.ta[j]);
+      // 線性不是平方：ta 在急彎是 1.5 上下，平方之後同一個字裡最貴與最便宜的一小段
+      // 差到十倍，慢的那頭整幀不動、快的那頭一幀跳過半個字高。要的是「急彎明顯慢一點」，
+      // 不是「急彎慢十倍」—— 拉開歸拉開，別拉到刷痕自己斷開
+      p.c.push(p.c[p.c.length-1] + 1 + CURV*s.ta[j]);
     }
     p.W = p.c[p.c.length-1]; sum += p.W;
   }
@@ -517,12 +528,11 @@ function paintFog(){
 }
 
 // ── 遮罩：白＝有霧、透明＝已擦乾淨 ────────────────────────────────
-// 封面停在 .90 不是 1：水脊要靠「比周圍更白」才看得出來，封死在 1 就沒地方可推了。
 // 用 copy 不是 source-over —— source-over 只能往上加，蓋不回上一分鐘爬滿的那面
 function seal(){
   const m = mask.g;
   m.globalCompositeOperation = 'copy';
-  m.fillStyle = 'rgba(255,255,255,.90)'; m.fillRect(0, 0, MW, MH);
+  m.fillStyle = 'rgba(255,255,255,' + SEAL + ')'; m.fillRect(0, 0, MW, MH);
   m.globalCompositeOperation = 'source-over';
 }
 
@@ -577,11 +587,13 @@ function makePads(){
 // wear 是這一點總共壓幾枚（含小數，最後那一枚用 alpha 補）：一路滑過去的地方左右都有
 // 鄰居疊上來，頭尾只有一邊有，不補的話兩端會自己淡成尖尾 —— 那又變回筆了。
 // 手指按下去、抬起來本來就比較重，停著磨的地方也是
-function stamp(x, y, r, dx, dy, wear, pad){
+// skew 只轉指紋、不轉水脊：body 的輪廓是圓的，多轉一點只換條紋方向；flank 是沿走向的
+// 一條帶子，跟著歪的話推起來的水就離開筆畫邊了
+function stamp(x, y, r, dx, dy, wear, pad, skew = 0){
   const a = Math.atan2(dy, dx), m = mask.g, s = scr.g, p = pad || body;
   m.save();
   m.globalCompositeOperation = 'destination-out';
-  m.translate(x, y); m.rotate(a);
+  m.translate(x, y); m.rotate(a + skew);
   for(let e = wear; e > 0; e--){
     m.globalAlpha = Math.min(1, e); m.drawImage(p.e, -r, -r, r*2, r*2);
   }
@@ -629,6 +641,14 @@ function creep(){
   m.clearRect(0, 0, MW, MH);
   m.drawImage(scr.e, 0, 0);
   m.globalAlpha = GAIN; m.drawImage(scr.e, 0, 0); m.globalAlpha = 1;
+  // 自疊那一步不挑地方：α' = α + GAIN·α·(1-α) 對整張畫布都成立，所以連「離筆跡十萬八千里、
+  // blur 根本沒動到」的封面也會從 .90 一路被推向 1，整面玻璃跟著愈來愈霧，下一分鐘 seal()
+  // 再一次打回去 —— 會看到整個畫面週期性地一起變濃。把均勻區被推上去的那一份除回來：
+  // destination-in 一張純色等於整張乘一個係數，封面剛好回到 SEAL，筆跡照樣往回爬
+  m.globalCompositeOperation = 'destination-in';
+  m.fillStyle = 'rgba(0,0,0,' + (1/(1 + GAIN*(1 - SEAL))) + ')';
+  m.fillRect(0, 0, MW, MH);
+  m.globalCompositeOperation = 'source-over';
   // blur 會從畫布外採到透明，連續跑一分鐘會把四個邊的霧啃掉一圈。每 tick 補回去。
   // 補的這一圈要有 4 個 σ 寬，不然 blur 的尾巴照樣從圈內側把霧吸走
   const e = Math.max(8*dpr, 4*CREEP*F);
@@ -682,7 +702,8 @@ function write(r){
             // 停留＝反覆磨那一點，擦得更乾淨也略寬；走得快的地方滑過去、擦得淺。
             // 另外一個半刷寬之內算頭尾，補的份量收成平方 —— 線性的話離端點半個刷寬處
             // 兩邊鄰居本來就疊滿了，再補就補過頭，反而在頭尾內側擦出一段特別深的
-            1 + GRIND*k + Math.pow(Math.max(0, 1 - q[5]/(BR*1.5)), 2));
+            1 + GRIND*k + Math.pow(Math.max(0, 1 - q[5]/(BR*1.5)), 2),
+            null, Math.sin(u/F*2.3)*SKEW);   // 擺一個週期約一個字的路徑長
       n++;
     }
     cut[d] = n;
