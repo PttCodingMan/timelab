@@ -6,6 +6,8 @@ process.env.TZ = 'UTC';
 const fs = require('fs');
 const vm = require('vm');
 
+const RAF_LAG = 20;                               // 見下面 performance.now 的註解
+
 function makeEnv(html, opts = {}) {
   const W = opts.width ?? 1200, H = opts.height ?? 750;
   let vnow = 0;                                   // 虛擬毫秒
@@ -76,7 +78,11 @@ function makeEnv(html, opts = {}) {
     clearTimeout: (id) => { const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); },
     setInterval: (cb, ms) => { const rec = { at: vnow + ms, cb, every: ms, id: tid }; timers.push(rec); return tid++; },
     clearInterval: (id) => { const i = timers.findIndex(t => t.id === id); if (i >= 0) timers.splice(i, 1); },
-    performance: { now: () => vnow },
+    // performance.now() 刻意比 rAF 的時間戳快 RAF_LAG。真的瀏覽器上 rAF 給的是
+    // 「這一幀開始的時刻」，它可能早於頁面啟動時讀到的 performance.now()，所以
+    // 第一次的 dt 會是負的。主迴圈撐不住負 dt 的話整條主執行緒會卡死，畫面一幀都
+    // 交不出來 —— 之前 life 就是這樣過了模擬、卻在 CI 拍縮圖時逾時。
+    performance: { now: () => vnow + RAF_LAG },
     Date: FakeDate, URLSearchParams, Math, JSON, Intl, console,
     AudioContext: undefined
   };
