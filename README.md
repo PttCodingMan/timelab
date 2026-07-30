@@ -112,7 +112,7 @@ workflow 裡的 `enablement: true` 不要指望它，job 的 `GITHUB_TOKEN` 通�
 第一次 push 會停在 `Resource not accessible by integration`。等價指令：
 
 ```bash
-gh api -X POST repos/PttCodingMan/clocklab/pages -f build_type=workflow
+gh api -X POST repos/PttCodingMan/timelab/pages -f build_type=workflow
 ```
 
 ---
