@@ -1,9 +1,9 @@
-# CLOCK LAB
+# TimeLab
 
-一間研究「時鐘還能長成什麼樣子」的實驗室。同一件事——把現在幾點顯示出來——
-每次換一套完全不同的做法：街機、翻頁、工地施工。
+一間研究「時間還能長成什麼樣子」的實驗室。同一件事——把現在幾點顯示出來——
+每次換一套完全不同的做法：街機、翻頁、工地施工、枯山水。
 
-每座時鐘是一個獨立資料夾，彼此不共用任何程式碼，只共用下面四個約定。
+每座時鐘是一個獨立資料夾，彼此不共用任何程式碼，只共用下面五個約定。
 
 **歡迎用你的想法新增時鐘，我都會上架。** 開個 PR，`check.py` 和 `simulate.js` 過得了就收。
 
@@ -25,6 +25,8 @@ galaga/  flip/  bricks/  zen/  fog/   一座時鐘一個資料夾
   "id": "galaga",
   "name": "小蜜蜂時鐘",
   "tagline": "一句話說它在幹嘛",
+  "name_en": "Galaga Clock",
+  "tagline_en": "the same one line, in English",
   "created": "2026-07-27",
   "tags": ["arcade", "canvas", "pwa"],
   "accent": "#f2c14e",
@@ -34,8 +36,9 @@ galaga/  flip/  bricks/  zen/  fog/   一座時鐘一個資料夾
 
 `id` 必須跟資料夾同名。`accent` 是展示頁那張卡片的重點色 —— 顏色由時鐘自己決定。
 `shot.freeze` 是截圖用的凍結時刻，讓縮圖每次都長一樣（[為什麼](docs/notes.md#截圖為什麼要凍結時間)）。
+`name_en` 和 `tagline_en` 是展示頁英文版用的，`check.py` 會擋沒填的 —— 別機翻，那兩句是門面。
 
-## 四個約定
+## 五個約定
 
 **一、`?embed=1` 要能認得。** 展示頁用 iframe 載入 `./<id>/?embed=1` 當預覽。
 看到這個參數就隱藏 UI 只留錶面，而且[不要註冊 service worker](docs/notes.md#為什麼展示頁不註冊-service-worker)。
@@ -59,6 +62,27 @@ document.documentElement.dataset.shown = drawn.join('');
 
 **四、manifest 全用相對路徑。** `start_url` 和 `scope` 寫 `"./"`，
 寫成 `"/"` 在 GitHub project page 上會直接失效、裝不起來。每份 manifest 再給一個明確的 `id`。
+
+**五、雙語。** 繁中／英文，靠 `localStorage['clocklab.lang']`（`'zh'`｜`'en'`）在同一個 origin 全站共用，
+所以從展示頁點進來、或直接開書籤，語言都接得上。HTML 裡的中文**就是** `zh` 原文，
+每頁只內嵌一份英文字典 —— 中文使用者不跑任何字串替換。字典的 key 直接用 element id：
+
+```js
+const EN = { _title:'Galaga Clock', bInstall:'Install', bWake:'Stay awake', bFull:'Fullscreen' };
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if (LANG_EN) {
+  document.documentElement.lang = 'en';
+  document.title = EN._title;
+  for (const [k, s] of Object.entries(EN)) document.getElementById(k)?.replaceChildren(s);
+}
+```
+
+語言鈕 id 用 `bLang` 並放進 `#ctrl`：那裡是裸 `button` 選擇器，樣式自動吃到，
+也會跟著 `?embed=1` 一起隱藏。切換就是寫 `localStorage` 然後 `location.reload()` —— 不做雙向
+DOM 還原，省掉「保存中文原文」和「重新渲染清單」兩件事。`<title>` 和 `<html lang>` 留中文原文，
+英文由 JS 改寫。畫面本來就全英文的時鐘（bricks、life）字典只要 `_title` 一個 key。
+manifest 一律英文：PWA manifest 規格不支援 i18n，靜態站也沒有 `Accept-Language` 可談。
 
 另外：可以致敬既有遊戲的**機制**，但角色、sprite、配色、名稱要自己畫（[細節](docs/notes.md#關於原創性)）。
 
