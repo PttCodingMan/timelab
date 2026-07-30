@@ -1,16 +1,16 @@
 {
   "id": "life",
   "name": "生命遊戲",
-  "tagline": "CRT 終端機跑著康威生命遊戲，時間以永不變的靜物釘在細胞海裡",
+  "tagline": "一整片真的在跑的康威生命遊戲，每分鐘從場外丟進滑翔機，撞掉舊數字、撞出新數字",
   "name_en": "Game of Life",
-  "tagline_en": "Conway's Game of Life on a CRT terminal, the time pinned into the cell soup as still lifes that never change.",
+  "tagline_en": "A genuine Conway's Game of Life field. Every minute gliders are thrown in from off-screen: they crash the old digits away and crash the new ones into being.",
   "created": "2026-07-29",
   "tags": ["cellular", "terminal", "conway"],
   "accent": "#ffffff",
   "shot": {
     "width": 1200,
     "height": 750,
-    "freeze": "2026-07-29T10:08:00+08:00",
-    "settle": 1500
+    "freeze": "2026-07-30T10:08:03+08:00",
+    "settle": 1800
   }
 }
