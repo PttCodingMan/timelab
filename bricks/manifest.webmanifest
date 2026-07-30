@@ -1,9 +1,9 @@
 {
   "id": "bricks-clock",
-  "name": "工地時鐘",
-  "short_name": "工地時鐘",
-  "description": "數字是水泥磚。分鐘一變，拆除工人先用電鑽把舊磚打掉，砌造工人再把新磚一塊一塊砌回來。",
-  "lang": "zh-Hant",
+  "name": "Construction Clock",
+  "short_name": "Bricks",
+  "description": "The digits are cinder blocks. Every minute the demolition crew jackhammers the old ones out, then the masons lay the new ones back brick by brick.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

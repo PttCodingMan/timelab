@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>生命遊戲時鐘</title>
-<meta name="description" content="Conway's Game of Life 跑在整片 CRT 上，時間以永不變的靜物釘在細胞海裡。">
+<meta name="description" content="Conway's Game of Life 跑在整片 CRT 上，時間以永不變的靜物釘在細胞海裡。 Conway's Game of Life on a CRT terminal, the time pinned into the cell soup as still lifes that never change.">
 <meta name="theme-color" content="#0a0a0a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="生命遊戲時鐘">
+<meta name="apple-mobile-web-app-title" content="Life">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
@@ -34,6 +34,15 @@
 <script>
 (() => {
 'use strict';
+
+// ── 語言 ────────────────────────────────────────────────────────
+const EN = { _title:'Game of Life' };
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if(LANG_EN){
+  document.documentElement.lang = 'en';
+  document.title = EN._title;
+}
 
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');

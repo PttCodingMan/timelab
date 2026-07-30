@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>翻頁時鐘</title>
-<meta name="description" content="黑白翻頁時鐘，機場看板調性，時:分兩張大牌，24 小時制。">
+<meta name="description" content="黑白翻頁時鐘，機場看板調性，時:分兩張大牌，24 小時制。 Two black split-flap cards, white type, airport departure board. On the minute the leaves clatter down.">
 <meta name="theme-color" content="#08090a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="翻頁時鐘">
+<meta name="apple-mobile-web-app-title" content="Flip">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
@@ -145,12 +145,28 @@
     <button id="bInstall" hidden>安裝</button>
     <button id="bWake" aria-pressed="false">防休眠</button>
     <button id="bFull">全螢幕</button>
+    <button id="bLang">EN</button>
   </div>
 </div>
 
 <script>
 (() => {
 'use strict';
+
+// ── 語言 ────────────────────────────────────────────────────────
+const EN = { _title:'Flip Clock', bInstall:'Install', bWake:'Stay awake', bFull:'Fullscreen' };
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if(LANG_EN){
+  document.documentElement.lang = 'en';
+  document.title = EN._title;
+  for(const [k, s] of Object.entries(EN)) document.getElementById(k)?.replaceChildren(s);
+}
+{
+  const b = document.getElementById('bLang');
+  b.textContent = LANG_EN ? '中' : 'EN';
+  b.onclick = () => { localStorage.setItem('clocklab.lang', LANG_EN ? 'zh' : 'en'); location.reload(); };
+}
 
 const $ = id => document.getElementById(id);
 const IDS = ['hu','hl','hfu','hfl','mu','ml','mfu','mfl'];

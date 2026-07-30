@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>收據時鐘</title>
-<meta name="description" content="熱感印表機每分鐘吐一張把時間當商品賣的帳單，過了掉落線就撕下來，飄著掉出畫面外。">
+<meta name="description" content="熱感印表機每分鐘吐一張把時間當商品賣的帳單，過了掉落線就撕下來，飄著掉出畫面外。 A thermal printer bills you for the minute, once a minute. When it expires, tear it off and let it flutter off-screen.">
 <meta name="theme-color" content="#1b1815">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="收據時鐘">
+<meta name="apple-mobile-web-app-title" content="Receipt">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
@@ -58,11 +58,27 @@
   <button id="bInstall" hidden>安裝</button>
   <button id="bWake" aria-pressed="false">防休眠</button>
   <button id="bFull">全螢幕</button>
+  <button id="bLang">EN</button>
 </div>
 
 <script>
 (() => {
 'use strict';
+
+// ── 語言 ────────────────────────────────────────────────────────
+const EN = { _title:'Receipt Clock', bInstall:'Install', bWake:'Stay awake', bFull:'Fullscreen' };
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if(LANG_EN){
+  document.documentElement.lang = 'en';
+  document.title = EN._title;
+  for(const [k, s] of Object.entries(EN)) document.getElementById(k)?.replaceChildren(s);
+}
+{
+  const b = document.getElementById('bLang');
+  b.textContent = LANG_EN ? '中' : 'EN';
+  b.onclick = () => { localStorage.setItem('clocklab.lang', LANG_EN ? 'zh' : 'en'); location.reload(); };
+}
 
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
@@ -120,7 +136,7 @@ function rng(seed){
   };
 }
 const p2 = n => String(n).padStart(2, '0');
-const WD = '日一二三四五六';
+const WD = LANG_EN ? ['SUN','MON','TUE','WED','THU','FRI','SAT'] : '日一二三四五六';
 
 // ── 版面 ──────────────────────────────────────────────────────────
 let W=0, H=0, dpr=1, RW=0, RH=0, LH=0, U=0, CX=0, HEAD=0, DROP=0;
@@ -248,7 +264,7 @@ function receipt(m, x, top){
   };
   ctx.fillStyle = INK;
   put('CLOCK LAB', 1.75, 1.10, 'center', cx, true);
-  put('台北店   REG #04', 2.92, 0.74, 'center', cx);
+  put(LANG_EN ? 'TAIPEI   REG #04' : '台北店   REG #04', 2.92, 0.74, 'center', cx);
   put(d.getFullYear() + '-' + p2(d.getMonth()+1) + '-' + p2(d.getDate())
       + ' (' + WD[d.getDay()] + ')', 4.02, 0.74, 'center', cx);
   dash(x, top + 4.75*lh);

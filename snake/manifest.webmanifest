@@ -1,9 +1,9 @@
 {
   "id": "snake-clock",
-  "name": "貪食蛇時鐘",
-  "short_name": "貪食蛇",
-  "description": "數字是一條蛇的身體。換分鐘時頭沿新數字的筆順爬，尾巴從舊路徑收回，長度不夠就沿路吃。",
-  "lang": "zh-Hant",
+  "name": "Snake Clock",
+  "short_name": "Snake",
+  "description": "The snake's body is the stroke. On the minute the head burrows out and crawls the new digits while the tail reels in the old, eating along the way when it comes up short.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

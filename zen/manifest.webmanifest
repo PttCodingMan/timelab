@@ -1,9 +1,9 @@
 {
   "id": "zen-clock",
-  "name": "枯山水時鐘",
-  "short_name": "枯山水",
-  "description": "沙上的耙痕就是數字，換分鐘時耙子走過，抹平舊的、耙出新的。",
-  "lang": "zh-Hant",
+  "name": "Zen Garden Clock",
+  "short_name": "Zen",
+  "description": "The rake lines are the digits. On the minute the rake passes through, smoothing the old away and combing the new in.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

@@ -2,6 +2,8 @@
   "id": "fog",
   "name": "霧玻璃時鐘",
   "tagline": "呵一口氣把玻璃糊掉，指尖擦出現在幾點，霧再爬回來吃掉",
+  "name_en": "Fogged Glass Clock",
+  "tagline_en": "Breathe on the glass to blur it, wipe the time out with a fingertip, then watch the fog creep back and eat it.",
   "created": "2026-07-29",
   "tags": ["fog", "canvas", "pwa"],
   "accent": "#cfe3ee",

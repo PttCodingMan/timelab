@@ -1,9 +1,9 @@
 {
   "id": "fog-clock",
-  "name": "霧玻璃時鐘",
-  "short_name": "霧玻璃",
-  "description": "呵一口氣把玻璃糊掉，指尖沿筆順擦出現在幾點，霧再慢慢從邊緣爬回來把字吃掉。",
-  "lang": "zh-Hant",
+  "name": "Fogged Glass Clock",
+  "short_name": "Fog",
+  "description": "Breathe on the glass to blur it, wipe the time out with a fingertip, then watch the fog creep back and eat it.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

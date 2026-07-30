@@ -1,9 +1,9 @@
 {
   "id": "life-clock",
-  "name": "生命遊戲",
-  "short_name": "生命遊戲",
-  "description": "康威生命遊戲跑在 CRT 終端機上，時間永不變的靜物釘在細胞海裡。",
-  "lang": "zh-Hant",
+  "name": "Game of Life",
+  "short_name": "Life",
+  "description": "Conway's Game of Life on a CRT terminal, the time pinned into the cell soup as still lifes that never change.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

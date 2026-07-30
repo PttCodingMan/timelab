@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CLOCK LAB — 時鐘實驗室</title>
-<meta name="description" content="研究時鐘還能長成什麼樣子的實驗室。每一座都是獨立的一頁，滑過去就會開始跑。">
+<title data-i18n="title">CLOCK LAB — 時鐘實驗室</title>
+<meta name="description" content="研究時鐘還能長成什麼樣子的實驗室。每一座都是獨立的一頁，滑過去就會開始跑。 A lab for finding out what else a clock can look like. Each one is its own page — hover and it starts running.">
 <meta name="theme-color" content="#dee1e3">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -38,6 +38,10 @@
        font-size:clamp(26px,4.4vw,42px);line-height:1;letter-spacing:-.02em}
   #now .s{color:var(--ink-2)}
   .meta{font-size:11px;color:var(--ink-2);margin-top:9px;letter-spacing:.08em}
+  #bLang{font:inherit;font-size:11px;letter-spacing:.08em;color:var(--ink);
+         background:none;border:1px solid var(--rule);padding:3px 9px;
+         margin-top:9px;cursor:pointer}
+  #bLang:hover{border-color:var(--ink)}
 
   /* ── 收藏格 ─────────────────────────────────────────────────── */
   .grid{display:grid;gap:clamp(28px,4vw,52px) clamp(20px,3vw,36px);
@@ -94,11 +98,12 @@
 <header>
   <div>
     <div class="mark">CLOCK LAB</div>
-    <p class="sub">研究時鐘還能長成什麼樣子的實驗室。每一座都是獨立的一頁，滑過去就會開始跑。</p>
+    <p class="sub" data-i18n="sub">研究時鐘還能長成什麼樣子的實驗室。每一座都是獨立的一頁，滑過去就會開始跑。</p>
   </div>
   <div class="readout">
     <div id="now">--:--<span class="s">:--</span></div>
-    <div class="meta" id="count">載入中</div>
+    <div class="meta" id="count" data-i18n="count">載入中</div>
+    <button id="bLang">EN</button>
   </div>
 </header>
 
@@ -106,12 +111,30 @@
 
 <footer>
   <span id="tz">—</span>
-  <span>原始碼在 <a class="plain" href="https://github.com/PttCodingMan/clocklab">GitHub</a></span>
+  <span><span data-i18n="source">原始碼在</span> <a class="plain" href="https://github.com/PttCodingMan/clocklab">GitHub</a></span>
 </footer>
 
 <script>
 (() => {
 'use strict';
+// ── 語言 ────────────────────────────────────────────────────────
+const EN = {
+  title: 'CLOCK LAB — Clock Laboratory',
+  sub:   'A lab for finding out what else a clock can look like. Each one is its own page — hover and it starts running.',
+  count: 'Loading',
+  source:'Source on',
+};
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if(LANG_EN){
+  document.documentElement.lang = 'en';
+  document.querySelectorAll('[data-i18n]').forEach(e => e.replaceChildren(EN[e.dataset.i18n]));
+}
+{
+  const b = document.getElementById('bLang');
+  b.textContent = LANG_EN ? '中' : 'EN';
+  b.onclick = () => { localStorage.setItem('clocklab.lang', LANG_EN ? 'zh' : 'en'); location.reload(); };
+}
 const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const grid = document.getElementById('grid');
 
@@ -137,22 +160,22 @@ function card(c, i){
   a.innerHTML = `
     <div class="eyebrow"><span class="dot"></span><span>${p2(i+1)}</span></div>
     <div class="frame">
-      <div class="ph">尚無截圖</div>
+      <div class="ph">${LANG_EN ? 'No screenshot yet' : '尚無截圖'}</div>
       <span class="live"><i></i>LIVE</span>
     </div>
     <h2></h2>
     <p class="tag"></p>
     <div class="foot"><span>${tags}</span><span>${c.created || ''}</span></div>`;
 
-  a.querySelector('h2').textContent = c.name;
-  a.querySelector('.tag').textContent = c.tagline || '';
+  a.querySelector('h2').textContent = LANG_EN ? c.name_en : c.name;
+  a.querySelector('.tag').textContent = (LANG_EN ? c.tagline_en : c.tagline) || '';
 
   const frame = a.querySelector('.frame');
   const live  = a.querySelector('.live');
 
   if(c.thumb){
     const img = new Image();
-    img.src = c.thumb; img.alt = `${c.name}的畫面`; img.loading = 'lazy';
+    img.src = c.thumb; img.alt = LANG_EN ? `${c.name_en} screen` : `${c.name}的畫面`; img.loading = 'lazy';
     img.onload = () => a.querySelector('.ph')?.remove();
     frame.prepend(img);
   }
@@ -164,7 +187,7 @@ function card(c, i){
     clearTimeout(off);
     ifr = document.createElement('iframe');
     ifr.src = `./${c.id}/?embed=1`;
-    ifr.title = `${c.name}預覽`;
+    ifr.title = LANG_EN ? `${c.name_en} preview` : `${c.name}預覽`;
     ifr.setAttribute('scrolling','no');
     ifr.setAttribute('tabindex','-1');
     ifr.setAttribute('aria-hidden','true');
@@ -189,16 +212,22 @@ function card(c, i){
 fetch('./clocks.json', {cache:'no-cache'})
   .then(r => r.json())
   .then(list => {
-    document.getElementById('count').textContent = `${p2(list.length)} 座 · 依建立時間`;
+    document.getElementById('count').textContent = LANG_EN
+      ? `${p2(list.length)} clocks · by date built`
+      : `${p2(list.length)} 座 · 依建立時間`;
     if(!list.length){
-      grid.innerHTML = '<li class="empty">還沒有時鐘。建一個資料夾、放 index.html 和 clock.json，重新 build 就會出現在這裡。</li>';
+      grid.innerHTML = LANG_EN
+        ? '<li class="empty">No clocks yet. Make a folder, drop in index.html and clock.json, rebuild and it shows up here.</li>'
+        : '<li class="empty">還沒有時鐘。建一個資料夾、放 index.html 和 clock.json，重新 build 就會出現在這裡。</li>';
       return;
     }
     list.forEach((c,i) => grid.appendChild(card(c,i)));
   })
   .catch(() => {
-    document.getElementById('count').textContent = '讀不到清單';
-    grid.innerHTML = '<li class="empty">找不到 clocks.json。先跑 <code>python tools/build.py</code>。</li>';
+    document.getElementById('count').textContent = LANG_EN ? "Can't load list" : '讀不到清單';
+    grid.innerHTML = LANG_EN
+      ? '<li class="empty">clocks.json not found. Run <code>python tools/build.py</code> first.</li>'
+      : '<li class="empty">找不到 clocks.json。先跑 <code>python tools/build.py</code>。</li>';
   });
 })();
 </script>

@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>枯山水時鐘</title>
-<meta name="description" content="沙上的耙痕就是數字，換分鐘時耙子走過，抹平舊的、耙出新的。">
+<meta name="description" content="沙上的耙痕就是數字，換分鐘時耙子走過，抹平舊的、耙出新的。 The rake lines are the digits. On the minute the rake passes through, smoothing the old away and combing the new in.">
 <meta name="theme-color" content="#ddd6c3">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="枯山水時鐘">
+<meta name="apple-mobile-web-app-title" content="Zen">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
@@ -58,11 +58,27 @@
   <button id="bInstall" hidden>安裝</button>
   <button id="bWake" aria-pressed="false">防休眠</button>
   <button id="bFull">全螢幕</button>
+  <button id="bLang">EN</button>
 </div>
 
 <script>
 (() => {
 'use strict';
+
+// ── 語言 ────────────────────────────────────────────────────────
+const EN = { _title:'Zen Garden Clock', bInstall:'Install', bWake:'Stay awake', bFull:'Fullscreen' };
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if(LANG_EN){
+  document.documentElement.lang = 'en';
+  document.title = EN._title;
+  for(const [k, s] of Object.entries(EN)) document.getElementById(k)?.replaceChildren(s);
+}
+{
+  const b = document.getElementById('bLang');
+  b.textContent = LANG_EN ? '中' : 'EN';
+  b.onclick = () => { localStorage.setItem('clocklab.lang', LANG_EN ? 'zh' : 'en'); location.reload(); };
+}
 
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');

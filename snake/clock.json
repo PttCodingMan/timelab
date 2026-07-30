@@ -2,6 +2,8 @@
   "id": "snake",
   "name": "貪食蛇時鐘",
   "tagline": "蛇身就是筆畫。換分鐘頭鑽出去爬成新數字，尾巴從舊路徑收回，長度不夠就沿路吃",
+  "name_en": "Snake Clock",
+  "tagline_en": "The snake's body is the stroke. On the minute the head burrows out and crawls the new digits while the tail reels in the old, eating along the way when it comes up short.",
   "created": "2026-07-29",
   "tags": ["arcade", "canvas", "pwa"],
   "accent": "#8bac0f",

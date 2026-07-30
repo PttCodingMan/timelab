@@ -25,6 +25,10 @@ def check_clock(folder: Path) -> list[str]:
     if meta.get("id") != folder.name:
         bad.append(f"clock.json 的 id 是 {meta.get('id')!r}，資料夾卻叫 {folder.name!r}")
 
+    for k in ("name_en", "tagline_en"):
+        if not str(meta.get(k, "")).strip():
+            bad.append(f"{folder.name}/clock.json 缺少 {k}（英文文案，見 docs/specs/2026-07-30-i18n.md）")
+
     if "dataset.shown" not in html:
         bad.append(
             "index.html 沒有寫 document.documentElement.dataset.shown，"

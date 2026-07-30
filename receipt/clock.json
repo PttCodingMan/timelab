@@ -2,6 +2,8 @@
   "id": "receipt",
   "name": "收據時鐘",
   "tagline": "熱感印表機每分鐘吐一張帳單，把這一分鐘賣給你，過期就撕下來，飄著掉出畫面外",
+  "name_en": "Receipt Clock",
+  "tagline_en": "A thermal printer bills you for the minute, once a minute. When it expires, tear it off and let it flutter off-screen.",
   "created": "2026-07-29",
   "tags": ["receipt", "canvas", "pwa"],
   "accent": "#e9e0cd",

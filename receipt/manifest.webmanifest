@@ -1,9 +1,9 @@
 {
   "id": "receipt-clock",
-  "name": "收據時鐘",
-  "short_name": "收據",
-  "description": "熱感印表機每分鐘吐一張把時間當商品賣的帳單，過了掉落線就捲成一團落到地上堆著。",
-  "lang": "zh-Hant",
+  "name": "Receipt Clock",
+  "short_name": "Receipt",
+  "description": "A thermal printer bills you for the minute, once a minute. When it expires, tear it off and let it flutter off-screen.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>工地時鐘</title>
-<meta name="description" content="數字是水泥磚。分鐘一變，拆除工人先用電鑽把舊磚打掉，砌造工人再把新磚一塊一塊砌回來。">
+<meta name="description" content="數字是水泥磚。分鐘一變，拆除工人先用電鑽把舊磚打掉，砌造工人再把新磚一塊一塊砌回來。 The digits are cinder blocks. Every minute the demolition crew jackhammers the old ones out, then the masons lay the new ones back brick by brick.">
 <meta name="theme-color" content="#bcbcbc">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="工地時鐘">
+<meta name="apple-mobile-web-app-title" content="Bricks">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <link rel="icon" href="./icon-192.png">
@@ -103,6 +103,7 @@
       <button id="bSnd" aria-pressed="false">SOUND</button>
       <button id="bWake" aria-pressed="false">AWAKE</button>
       <button id="bFull">FULL</button>
+      <button id="bLang">EN</button>
     </div>
   </div>
   <div id="keys">SPACE BUILD · T FORMAT · S SOUND · W AWAKE · F FULL</div>
@@ -111,6 +112,21 @@
 <script>
 (() => {
 'use strict';
+
+// ── 語言 ────────────────────────────────────────────────────────
+const EN = { _title:'Construction Clock' };
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if(LANG_EN){
+  document.documentElement.lang = 'en';
+  document.title = EN._title;
+  for(const [k, s] of Object.entries(EN)) document.getElementById(k)?.replaceChildren(s);
+}
+{
+  const b = document.getElementById('bLang');
+  b.textContent = LANG_EN ? '中' : 'EN';
+  b.onclick = () => { localStorage.setItem('clocklab.lang', LANG_EN ? 'zh' : 'en'); location.reload(); };
+}
 
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');

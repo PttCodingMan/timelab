@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>小蜜蜂時鐘</title>
-<meta name="description" content="Galaga 風格的時鐘，每分鐘派戰機把舊數字打掉。">
+<meta name="description" content="Galaga 風格的時鐘，每分鐘派戰機把舊數字打掉。 Every minute a fighter scrambles to shoot the old digits down, and a fresh formation dives into place.">
 <meta name="theme-color" content="#05060a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="小蜜蜂時鐘">
+<meta name="apple-mobile-web-app-title" content="Galaga">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
@@ -114,6 +114,7 @@
       <button id="bSnd" aria-pressed="false">音效</button>
       <button id="bWake" aria-pressed="false">防休眠</button>
       <button id="bFull">全螢幕</button>
+      <button id="bLang">EN</button>
     </div>
   </div>
   <div id="keys">空白鍵 攻擊 · T 時制 · S 音效 · W 防休眠 · F 全螢幕</div>
@@ -122,6 +123,23 @@
 <script>
 (() => {
 'use strict';
+
+// ── 語言 ────────────────────────────────────────────────────────
+const EN = { _title:'Galaga Clock', waveLabel:'NEXT WAVE', bInstall:'Install', bTest:'Fire',
+             bFmt:'24-hour', bSnd:'Sound', bWake:'Stay awake', bFull:'Fullscreen',
+             keys:'SPACE fire · T clock · S sound · W awake · F fullscreen' };
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if(LANG_EN){
+  document.documentElement.lang = 'en';
+  document.title = EN._title;
+  for(const [k, s] of Object.entries(EN)) document.getElementById(k)?.replaceChildren(s);
+}
+{
+  const b = document.getElementById('bLang');
+  b.textContent = LANG_EN ? '中' : 'EN';
+  b.onclick = () => { localStorage.setItem('clocklab.lang', LANG_EN ? 'zh' : 'en'); location.reload(); };
+}
 
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
@@ -467,7 +485,8 @@ const bFmt=document.getElementById('bFmt'), bSnd=document.getElementById('bSnd')
       bInstall=document.getElementById('bInstall');
 
 document.getElementById('bTest').onclick = () => startChange(timeStr(), true);
-bFmt.onclick = () => { h24=!h24; bFmt.textContent = h24?'24 小時':'12 小時';
+bFmt.onclick = () => { h24=!h24;
+  bFmt.textContent = LANG_EN ? (h24?'24-hour':'12-hour') : (h24?'24 小時':'12 小時');
   bFmt.setAttribute('aria-pressed', String(h24)); startChange(timeStr(), true); };
 bSnd.onclick = () => { sound=!sound; bSnd.setAttribute('aria-pressed', String(sound)); if(sound) blip('shoot'); };
 bFull.onclick = () => {

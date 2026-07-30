@@ -2,6 +2,8 @@
   "id": "life",
   "name": "生命遊戲",
   "tagline": "CRT 終端機跑著康威生命遊戲，時間以永不變的靜物釘在細胞海裡",
+  "name_en": "Game of Life",
+  "tagline_en": "Conway's Game of Life on a CRT terminal, the time pinned into the cell soup as still lifes that never change.",
   "created": "2026-07-29",
   "tags": ["cellular", "terminal", "conway"],
   "accent": "#ffffff",

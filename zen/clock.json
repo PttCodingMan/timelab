@@ -2,6 +2,8 @@
   "id": "zen",
   "name": "枯山水時鐘",
   "tagline": "耙痕就是數字，換分鐘時耙子走過，抹平舊的耙出新的",
+  "name_en": "Zen Garden Clock",
+  "tagline_en": "The rake lines are the digits. On the minute the rake passes through, smoothing the old away and combing the new in.",
   "created": "2026-07-29",
   "tags": ["zen", "canvas", "pwa"],
   "accent": "#c9bfa6",

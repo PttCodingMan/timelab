@@ -1,9 +1,9 @@
 {
   "id": "galaga-clock",
-  "name": "小蜜蜂時鐘",
-  "short_name": "小蜜蜂時鐘",
-  "description": "Galaga 風格的時鐘，每分鐘派戰機把舊的數字打掉，新的數字俯衝進場。",
-  "lang": "zh-Hant",
+  "name": "Galaga Clock",
+  "short_name": "Galaga",
+  "description": "Every minute a fighter scrambles to shoot the old digits down, and a fresh formation dives into place.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

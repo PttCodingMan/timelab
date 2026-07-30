@@ -1,9 +1,9 @@
 {
   "id": "flip-clock",
-  "name": "翻頁時鐘",
-  "short_name": "翻頁時鐘",
-  "description": "黑白翻頁時鐘，機場看板調性，整分鐘葉片落下翻新，24 小時制。",
-  "lang": "zh-Hant",
+  "name": "Flip Clock",
+  "short_name": "Flip",
+  "description": "Two black split-flap cards, white type, airport departure board. On the minute the leaves clatter down.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",
