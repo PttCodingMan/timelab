@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title data-i18n="title">CLOCK LAB — 時間實驗室</title>
-<meta name="description" content="研究時鐘還能長成什麼樣子的實驗室。每一座都是獨立的一頁，滑過去就會開始跑。 A lab for finding out what else a clock can look like. Each one is its own page — hover and it starts running.">
+<title data-i18n="title">TimeLab — 時間實驗室</title>
+<meta name="description" content="研究時間的每一種可能。每一座時鐘都是時間借來的身體，用完一分鐘就拆掉重建。 A lab for every possible shape of time. Every clock here is a body time borrows, worn for one minute, then torn down and rebuilt.">
 <meta name="theme-color" content="#dee1e3">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -32,7 +32,11 @@
          gap:24px 32px;padding-bottom:22px;border-bottom:1px solid var(--ink)}
   .mark{font-family:'Archivo',sans-serif;font-weight:900;
         font-size:clamp(44px,9vw,104px);line-height:.86;letter-spacing:-.045em}
-  .sub{color:var(--ink-2);font-size:12px;margin-top:14px;max-width:34ch}
+  /* pre-line：讓副標的斷句由文字裡的換行決定，而不是靠 <br>
+     —— 切語言時 replaceChildren 只寫純文字，<br> 會被吃掉 */
+  /* 52ch：中文每句最長 15 字（≈30ch），英文最長 46 字元，兩種語言都不折行 */
+  .sub{color:var(--ink-2);font-size:12px;margin-top:14px;max-width:52ch;
+       white-space:pre-line}
   .readout{text-align:right;flex:0 0 auto}
   #now{font-variant-numeric:tabular-nums;font-weight:600;
        font-size:clamp(26px,4.4vw,42px);line-height:1;letter-spacing:-.02em}
@@ -97,8 +101,11 @@
 <body>
 <header>
   <div>
-    <div class="mark">CLOCK LAB</div>
-    <p class="sub" data-i18n="sub">研究時鐘還能長成什麼樣子的實驗室。每一座都是獨立的一頁，滑過去就會開始跑。</p>
+    <div class="mark">TimeLab</div>
+    <p class="sub" data-i18n="sub">研究時間的每一種可能。
+每一座時鐘都是時間借來的身體，
+用完一分鐘，就拆掉重建。
+滑過去，它就開始跑。</p>
   </div>
   <div class="readout">
     <div id="now">--:--<span class="s">:--</span></div>
@@ -119,8 +126,8 @@
 'use strict';
 // ── 語言 ────────────────────────────────────────────────────────
 const EN = {
-  title: 'CLOCK LAB — Time Laboratory',
-  sub:   'A lab for finding out what else a clock can look like. Each one is its own page — hover and it starts running.',
+  title: 'TimeLab — Time Laboratory',
+  sub:   'A lab for every possible shape of time.\nEvery clock here is a body time borrows,\nworn for a minute, then torn down and rebuilt.\nHover, and it starts running.',
   count: 'Loading',
   source:'Source on',
 };
