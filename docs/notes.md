@@ -40,6 +40,34 @@ git 會被沒有意義的二進位差異洗版。`shoot.py` 在頁面腳本執�
 `settle` 要避開動畫進行中的瞬間（flip 的 `freeze` 定在 `09:06:03`、`settle` 只給 900ms，
 下一次翻頁在 `09:07:00`，穩穩停在靜止態）。
 
+## 主迴圈不要寫成 `while(n--)`
+
+life v2 曾經這樣補代數：
+
+```js
+const dt = Math.min(now - last, 500);      // 沒有下界
+acc += dt * rate / 1000;
+let n = Math.min(Math.floor(acc), 40);
+acc -= n;
+while(n--) tick();                          // ← 地雷
+```
+
+rAF 給的時間戳是「**這一幀開始的時刻**」，它可能早於頁面啟動時讀到的
+`performance.now()`，所以第一次的 `dt` 是負的。`acc` 一變負，`n` 就是 `-1`，
+而 `n--` 對負數永遠 truthy —— 迴圈永不結束，整條主執行緒當場卡死，
+畫面連一幀都交不出來。
+
+症狀很難查：`check.py`、`simulate.js`、外加 35 個情境全部綠燈，
+CI 卻在 `shoot.py` 掛掉，而且訊息只有 `Page.screenshot: Timeout 30000ms exceeded`
+（頁面載入是成功的 —— networkidle 和 `wait_for_timeout` 都由瀏覽器端判定，
+不需要頁面交出畫面）。
+
+兩件事一起做：**`dt` 夾在 `0…500`**，而且**補代數寫成 `while(acc >= 1)` 的條件迴圈**，
+不要先算出一個次數再倒數。既有的其他時鐘都是後者的寫法，所以只有 life 踩到。
+
+`simulate.js` 現在刻意讓 `performance.now()` 比 rAF 的時間戳快 `RAF_LAG = 20`，
+第一次的 `dt` 因此是負的 —— 這條測試線就是為了下次直接在模擬階段擋下來。
+
 ## 模擬為什麼要拆成 matrix
 
 模擬是整條 pipeline 唯一的瓶頸，單座約五分鐘而且是純 CPU，快取幫不上忙。
