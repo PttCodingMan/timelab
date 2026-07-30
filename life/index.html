@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>生命遊戲時鐘</title>
-<meta name="description" content="Conway's Game of Life 跑在整片 CRT 上，時間以永不變的靜物釘在細胞海裡。 Conway's Game of Life on a CRT terminal, the time pinned into the cell soup as still lifes that never change.">
+<meta name="description" content="一整片真的在跑的 Conway's Game of Life，每分鐘從畫面外丟進滑翔機，撞掉舊數字、撞出新數字。 A genuine Conway's Game of Life field; every minute gliders are injected from off-screen to crash the old digits away and build the new ones.">
 <meta name="theme-color" content="#0a0a0a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -48,8 +48,8 @@ const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
 const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-// 三階亮度：數字最亮、HUD 居中、背景細胞最暗。可讀性全靠這個階差。
-const FG = '#ffffff', DIM = '#4a4a4a', HUD = '#8a8a8a', TRAIL = 'rgba(10,10,10,0.25)';
+// 三階亮度：數字最亮、HUD 居中、其他細胞最暗。可讀性全靠這個階差。
+const FG = '#ffffff', DIM = '#4a4a4a', HUD = '#8a8a8a', TRAIL = 'rgba(10,10,10,0.28)';
 
 // 5×7 點陣。本專案的時鐘彼此不共用程式碼，所以各自持有一份字表。
 const GLYPH = {
@@ -65,97 +65,122 @@ const GLYPH = {
   '9':["01110","10001","10001","01111","00001","00010","01100"]
 };
 
+// ── 這座時鐘的規矩 ──────────────────────────────────────────────
+// 整片場只跑 B3/S23，沒有任何一格會被「按住」或「擦掉」。
+// 畫面上會變的東西只有兩個來源：一是規則本身，二是每分鐘從場外注入的
+// 滑翔機。注入之後就撒手，數字是真的被撞掉、真的被撞出來的。
+//
+// 兩個反應配方是拿真的模擬窮舉出來的（見 docs/specs/2026-07-30-life-real.md）：
+//   R_DEL   一隻滑翔機正面撞上 2×2 block，兩邊同歸於盡，那一區全空、零殘骸
+//   R_ADD   兩隻滑翔機對撞，留下一個 2×2 block，位置固定
+// cells 是相對於目標 block 左上角的座標，lead 是「注入後第幾代反應完成」。
+// 沿 -dir 往後退 k 格就是提早 4k 代發射，所以發射點可以拉到畫面外緣。
+const R_DEL = { dir:[1,1], cells:[[-4,-2],[-3,-4],[-3,-2],[-2,-3],[-2,-2]], lead:6 };
+const R_ADD = [{ dir:[1, 1], cells:[[-4,-6],[-3,-5],[-5,-4],[-4,-4],[-3,-4]], lead:20 },
+               { dir:[-1,1], cells:[[7,-8],[7,-7],[7,-6],[8,-6],[9,-7]],      lead:20 }];
+const KMAX = 22;                                  // 最多往後退幾格（≈ 飛 88 代）
+
+// 上下鏡射。block 對 y→1-y 對稱，生命遊戲規則也對稱，所以鏡射過的配方
+// 一定同樣成立 —— 不用再搜一次，也不會不一致。
+const flipY = r => ({ dir:[r.dir[0], -r.dir[1]],
+                      cells:r.cells.map(([x,y]) => [x, 1-y]), lead:r.lead });
+const D_DEL = [R_DEL, flipY(R_DEL)];              // [北邊來, 南邊來]
+const D_ADD = [R_ADD, R_ADD.map(flipY)];
+
+// 時序（單位：代）。這幾個數字不是試出來的，是解出來的。
+// 蓋字用的兩隻滑翔機一隻往東南、一隻往西南，兩者外框左上角的 y 差在整段
+// 飛行中是個常數：((32+DT_ADD)·Δr − COL_STAGGER·Δc + 8) / 4，其中 Δr、Δc
+// 是兩個目標點的點陣列差與欄差。只要對所有 (Δr,Δc) ≠ (0,0) 都讓它的絕對值
+// ≥ 6，兩隻的細胞之間就空得下兩排，連「空格被兩邊各湊出三個鄰居而誕生」都
+// 不會發生 —— 半路上永遠撞不到，只有 (0,0)（要湊成同一個 block 的那一對）
+// 會相遇。門檻是 6 不是 4：滑翔機一個週期裡外框會漂 1 格，兩邊各漂一次，
+// 加上中間那排空格會同時看到兩邊。4 和 5 都實測會爛。
+// DT_ADD=128、COL_STAGGER=32 是滿足這條件裡最短的一組。
+// 同理，同向同航道的兩隻間距是 |32+DT−COL|/4，拆字那邊是 |32−DT_DEL|/4；
+// 同向的兩隻漂移一致不用加保險，取 ≥ 5 就夠，所以 DT_DEL = 56（間距 6）。
+const DT_DEL = 56;      // 同一條航道上前後兩次消滅的間隔
+const DT_ADD = 128;     // 一列一列往回長的間隔
+const COL_STAGGER = 32; // 同一列裡逐欄錯開
+const PHASE_GAP = 130;  // 拆完的最後一隻落地之後才發射蓋字的，要 ≥ 20+4×KMAX
+const START_LEAD = 130; // 開跑到第一次反應的緩衝，要 ≥ 最長的 lead
+// 四位同時跑、完全同相。錯開反而會讓上面那條常數失效；同相時相鄰位的 x 差
+// 62 不是 8 的倍數，兩位之間根本共不到一條航道。
+const DIGIT_STAGGER = 0;
+const IDLE_HZ = 1, RUN_HZ = 320;
+
+// ── 版面 ────────────────────────────────────────────────────────
+// 一個點陣亮點 = 一個 2×2 block，格距 8（block 2 + 空隙 6）。
+// 空隙留到 6 格是為了讓滑翔機能從 block 之間的對角線穿過去而不打到旁邊。
+const S = 8, DW = 4*S+2, DH = 6*S+2;              // 一位數字 34×50 格
+const GX = 28, GC = 40, GY = 40, MY = 16;
+// 左右留白：橫式反正被寬度卡住，多留一點給滑翔機跑道；直式的瓶頸也是寬度，
+// 留太多數字會變小，所以縮到剛好夠最外側那一欄發射。
+const MXW = 20, MXS = 12;
+const STACK_RATIO = 1.25;
+
+let W=0, H=0, cell=6, cols=0, rows=0, ox=0, oy=0, stack=false;
+let CW=0, CH=0, POS=[];
+
+// 場：occ 是佔用圖，live 是活細胞 index 清單（稀疏，成本只跟人口有關）
+let occ, cnt, mark, bright, lane;
+let live = [], touch = new Int32Array(0), brightList = [];
+let gen = 0, injected = 0, heals = 0;
+
+let queue = [], qi = 0;                            // 排好的注入事件
+let runs = [];                                     // 進行中的換位（simulate.js 讀這個）
+let want = ['','','',''], drawn = ['','','',''];
+let blocks = [];                                   // 要畫成亮塊的 2×2 左上角
+
+const gi = (x,y) => y*cols + x;
+const inField = (x,y) => x>=2 && y>=2 && x<cols-2 && y<rows-2;
+
 // ── 規則 ────────────────────────────────────────────────────────
-// B3/S23。wrap=false 時邊界外一律當死細胞，給封閉的子網格用。
-function step(src, dst, w, h, wrap){
-  for(let y=0;y<h;y++){
-    for(let x=0;x<w;x++){
-      let n=0;
-      for(let j=-1;j<=1;j++){
-        for(let i=-1;i<=1;i++){
-          if(!i && !j) continue;
-          let xx=x+i, yy=y+j;
-          if(wrap){ xx=(xx+w)%w; yy=(yy+h)%h; }
-          else if(xx<0||yy<0||xx>=w||yy>=h) continue;
-          n += src[yy*w+xx];
-        }
+// B3/S23。只走訪活細胞和它們的鄰居，空曠的地方一毛錢都不花。
+function stepGrid(){
+  const need = live.length*9 + 16;
+  if(touch.length < need) touch = new Int32Array(need);
+  let ti = 0;
+  for(let n=0;n<live.length;n++){
+    const i = live[n], x = i%cols, y = (i/cols)|0;
+    if(!mark[i]){ mark[i]=1; touch[ti++]=i; }
+    for(let j=-1;j<=1;j++){
+      const yy = y+j; if(yy<0||yy>=rows) continue;
+      for(let k=-1;k<=1;k++){
+        if(!j && !k) continue;
+        const xx = x+k; if(xx<0||xx>=cols) continue;
+        const t = yy*cols + xx;
+        cnt[t]++;
+        if(!mark[t]){ mark[t]=1; touch[ti++]=t; }
       }
-      const a = src[y*w+x];
-      dst[y*w+x] = (a ? (n===2||n===3) : n===3) ? 1 : 0;
     }
   }
+  const nl = [];
+  for(let n=0;n<ti;n++){
+    const i = touch[n], c = cnt[i];
+    if(c===3 || (c===2 && occ[i])) nl.push(i);
+    cnt[i]=0; mark[i]=0;
+  }
+  for(let n=0;n<live.length;n++) occ[live[n]] = 0;
+  live = [];
+  for(let n=0;n<nl.length;n++){
+    const i = nl[n];
+    // 最外兩格當吸收層：萬一有東西飛出畫面就讓它出去，不要黏在邊上
+    if(!inField(i%cols, (i/cols)|0)) continue;
+    occ[i] = 1; live.push(i);
+  }
+  gen++;
 }
 
-// ── 數字 = 靜物 ─────────────────────────────────────────────────
-// 一個點陣亮點放大成 2×2 block，四格一組 → block 之間永遠隔 2 格。
-// 這個間距是硬需求：任何死細胞的 3×3 鄰域最多只碰得到 2 個活鄰居，
-// 生不出新細胞；block 內每格剛好 3 個鄰居，全部存活。所以數字在 B3/S23
-// 下數學上永不變形。隔 1 格就會互相催生新細胞、整個字爛掉。
-const S = 4, DW = 5*S, DH = 7*S;   // 一位數字佔 20×28 格
-const PAD = 4, SW = DW+PAD*2, SH = DH+PAD*2;   // 子網格：向外 padding 4 格
-
-const sidx = (x,y) => y*SW + x;
-
-function paintBlocks(sub, ch){
-  const g = GLYPH[ch]; if(!g) return;
-  for(let r=0;r<7;r++) for(let c=0;c<5;c++){
-    if(g[r][c] !== '1') continue;
-    for(let j=0;j<2;j++) for(let i=0;i<2;i++) sub[sidx(PAD+c*S+i, PAD+r*S+j)] = 1;
+function inject(cells){
+  for(let n=0;n<cells.length;n++){
+    const x = cells[n][0], y = cells[n][1];
+    if(!inField(x,y)) continue;
+    const i = gi(x,y);
+    if(!occ[i]){ occ[i]=1; live.push(i); }
   }
 }
 
-// 清空隙：數字區只留 block，噪點被斥力場吸走
-function clearGaps(sub, ch){
-  for(let y=0;y<DH;y++) for(let x=0;x<DW;x++) sub[sidx(PAD+x, PAD+y)] = 0;
-  paintBlocks(sub, ch);
-  return sub;
-}
-
-// 引信：在數字區的空隙帶灑隨機活細胞，block 會被鄰居干擾而崩解
-function sprinkle(sub, p){
-  for(let y=0;y<DH;y++) for(let x=0;x<DW;x++){
-    const k = sidx(PAD+x, PAD+y);
-    if(!sub[k] && Math.random()<p) sub[k] = 1;
-  }
-  return sub;
-}
-
-// 往前演化 n 代並全程錄影，回傳 n+1 幀（第 0 幀就是 seed）。倒著播就是成形動畫。
-function evolve(seed, n){
-  const out = [seed];
-  let a = seed;
-  for(let i=0;i<n;i++){
-    const b = new Uint8Array(SW*SH);
-    step(a, b, SW, SH, false);
-    out.push(b); a = b;
-  }
-  return out;
-}
-
-// ── 版面：長寬比 >= 1.25 走橫式一行，否則 HH 疊 MM ──────────────
-// 沿用既有時鐘的算法，只是每個點陣亮點佔 4×4 格，cell 邊長變成 1/4。
-const STACK_RATIO = 1.25;
-let W=0, H=0, cell=8, cols=0, rows=0, ox=0, oy=0, stack=false;
-let GW=96, GH=28, POS=[];
-const COLON_C = 46;                              // 橫式冒號的欄位（在 HH 與 MM 中間）
-
-let grid = new Uint8Array(0), next = new Uint8Array(0), pin = new Uint8Array(0);
-let pinned = [], halo = [], blocks = [], live = [], pop = 0, gen = 0;
-let runs = [];
-let want = ['','','',''], drawn = ['','','',''];
-
-const gidx = (x,y) => ((y%rows+rows)%rows)*cols + ((x%cols+cols)%cols);
-
-function commit(d, ch){
-  drawn[d] = ch;
-  document.documentElement.dataset.shown = drawn.join('');
-}
-
-function timeStr(){
-  const d = new Date();
-  return String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
-}
-
+// ── 版面計算 ────────────────────────────────────────────────────
 function layout(){
   W = cv.clientWidth; H = cv.clientHeight;
   const dpr = Math.min(window.devicePixelRatio||1, 2);
@@ -165,139 +190,298 @@ function layout(){
 
   stack = (W/H) < STACK_RATIO;
   if(stack){
-    GW = 44; GH = 60;
-    POS = [{c:0,r:0},{c:24,r:0},{c:0,r:32},{c:24,r:32}];
-    cell = Math.min(W/(GW+12), H/(GH+28));
+    CW = DW*2+GX; CH = DH*2+GY;
+    POS = [{x:0,y:0},{x:DW+GX,y:0},{x:0,y:DH+GY},{x:DW+GX,y:DH+GY}];
   }else{
-    GW = 96; GH = 28;
-    POS = [{c:0,r:0},{c:24,r:0},{c:52,r:0},{c:76,r:0}];
-    cell = Math.min(W/(GW+20), H/(GH+44));
+    CW = DW*4+GX*2+GC; CH = DH;
+    POS = [{x:0,y:0},{x:DW+GX,y:0},{x:2*DW+GX+GC,y:0},{x:3*DW+2*GX+GC,y:0}];
   }
-  cols = Math.max(GW+4, Math.ceil(W/cell));
-  rows = Math.max(GH+4, Math.ceil(H/cell));
-  ox = Math.floor((cols-GW)/2);
-  oy = Math.floor((rows-GH)/2);
+  const MX = stack ? MXS : MXW;
+  cell = Math.min(W/(CW+2*MX), H/(CH+2*MY));
+  cols = Math.max(CW+2*MX, Math.ceil(W/cell));
+  rows = Math.max(CH+2*MY, Math.ceil(H/cell));
+  ox = Math.floor((cols-CW)/2);
+  oy = Math.floor((rows-CH)/2);
 
-  grid = new Uint8Array(cols*rows);
-  next = new Uint8Array(cols*rows);
-  pin  = new Uint8Array(cols*rows);
-  runs = [];                                   // 換版面時進行中的動畫座標全失效
-  for(let i=0;i<grid.length;i++) if(Math.random()<0.12) grid[i]=1;   // 開場 soup
-  rebuildMasks();
-  applyMasks();
-  scan();
+  const n = cols*rows;
+  occ = new Uint8Array(n); cnt = new Uint8Array(n);
+  mark = new Uint8Array(n); bright = new Uint8Array(n); lane = new Uint8Array(n);
+  live = []; brightList = []; queue = []; qi = 0; runs = [];
+
+  markLanes();
+  seedDigits();
+  scatterStills();
+  rebuildBlocks();
+  refreshBright();
 }
 
-// ── 斥力場 ──────────────────────────────────────────────────────
-// 背景的滑翔機會吃掉數字，所以每代 step 完強制把 block 補回來、把外圈清掉。
-// 護城河寬 2 格而不是 1 格：1 格只夠擋住入侵，擋不住「背景細胞緊貼著筆畫」，
-// 數字在細胞海裡會糊掉。2 格讓每一筆都有呼吸空間。
-function addBlock(bx, by){
-  blocks.push([bx, by]);
-  for(let j=-2;j<=3;j++) for(let i=-2;i<=3;i++){
-    const k = gidx(bx+i, by+j);
-    if(i>=0 && i<2 && j>=0 && j<2){ pinned.push(k); pin[k] = 1; } else halo.push(k);
-  }
+const bx = (d,c) => ox + POS[d].x + c*S;
+const by = (d,r) => oy + POS[d].y + r*S;
+const colonX = () => ox + 2*DW+GX + ((GC-2)>>1);
+
+// 把某位數字現在該長什麼樣子攤成 block 左上角清單
+function glyphBlocks(d, ch){
+  const g = GLYPH[ch], out = [];
+  if(!g) return out;
+  for(let r=0;r<7;r++) for(let c=0;c<5;c++)
+    if(g[r][c]==='1') out.push([bx(d,c), by(d,r), c, r]);
+  return out;
 }
 
-function rebuildMasks(){
-  pinned = []; halo = []; blocks = []; pin.fill(0);
+function seedDigits(){
+  const t = timeStr();
+  want = t.split(''); drawn = want.slice();
+  for(let d=0;d<4;d++)
+    for(const [x,y] of glyphBlocks(d, drawn[d]))
+      inject([[x,y],[x+1,y],[x,y+1],[x+1,y+1]]);
+  if(!stack) for(const r of [2,4]){
+    const x = colonX(), y = by(0,r);
+    inject([[x,y],[x+1,y],[x,y+1],[x+1,y+1]]);
+  }
+  document.documentElement.dataset.shown = drawn.join('');
+}
+
+// ── 航道 ────────────────────────────────────────────────────────
+// 所有可能用到的滑翔機航道先畫成一張遮罩，之後拿來決定「哪些地方可以
+// 放裝飾物」—— 裝飾物只准站在永遠不會有滑翔機經過的地方，這樣它們才
+// 能一直安穩地震盪下去，而不是某一分鐘突然被撞掉。
+function stamp(x, y, rad){
+  for(let j=-rad;j<=rad;j++) for(let i=-rad;i<=rad;i++){
+    const xx=x+i, yy=y+j;
+    if(xx>=0 && yy>=0 && xx<cols && yy<rows) lane[yy*cols+xx] = 1;
+  }
+}
+function stampLane(rec, tx, ty){
+  for(let k=0;k<=KMAX;k++)
+    for(const [cx,cy] of rec.cells)
+      stamp(tx+cx-rec.dir[0]*k, ty+cy-rec.dir[1]*k, 2);
+}
+function markLanes(){
+  // 整塊字面連外圈都不放裝飾物：數字周圍要留白才讀得出來
+  for(let y=oy-3;y<=oy+CH+2;y++) for(let x=ox-3;x<=ox+CW+2;x++)
+    if(x>=0 && y>=0 && x<cols && y<rows) lane[y*cols+x] = 1;
   for(let d=0;d<4;d++){
-    if(runs.some(r => r.d === d)) continue;       // 正在跑 run 的那位暫時解除
-    const g = GLYPH[drawn[d]]; if(!g) continue;
-    const p = POS[d];
-    for(let r=0;r<7;r++) for(let c=0;c<5;c++)
-      if(g[r][c]==='1') addBlock(ox+p.c+c*S, oy+p.r+r*S);
+    // 數字本體與它的外圈
+    for(let r=0;r<7;r++) for(let c=0;c<5;c++){
+      const x = bx(d,c), y = by(d,r), h = r<=3 ? 0 : 1;
+      stamp(x, y, 3); stamp(x+1, y+1, 3);
+      stampLane(D_DEL[h], x, y);
+      for(const g of D_ADD[h]) stampLane(g, x, y);
+    }
   }
-  if(!stack) for(const r of [2,4]) addBlock(ox+COLON_C, oy+r*S);
+  if(!stack) for(const r of [2,4]){ stamp(colonX(), by(0,r), 3); stamp(colonX()+1, by(0,r)+1, 3); }
 }
 
-function applyMasks(){
-  for(let i=0;i<halo.length;i++) grid[halo[i]] = 0;
-  for(let i=0;i<pinned.length;i++) grid[pinned[i]] = 1;
+// ── 裝飾：真的靜物與真的振盪器 ──────────────────────────────────
+// 全部是 B3/S23 下貨真價實的物件，放下去就不用再管它。閒置時每秒一代，
+// 震盪器就是這座鐘的秒針。
+const STILLS = [
+  [[0,0],[1,0],[2,0]],                                        // blinker (p2)
+  [[1,0],[2,0],[3,0],[0,1],[1,1],[2,1]],                      // toad (p2)
+  [[0,0],[1,0],[0,1],[1,1],[2,2],[3,2],[2,3],[3,3]],          // beacon (p2)
+  [[1,0],[2,0],[0,1],[3,1],[1,2],[2,2]],                      // beehive
+  [[0,0],[1,0],[0,1],[2,1],[1,2]],                            // boat
+  [[1,0],[2,0],[0,1],[3,1],[1,2],[3,2],[2,3]],                // loaf
+  [[1,0],[0,1],[2,1],[1,2]]                                   // tub
+];
+function scatterStills(){
+  let s = (cols*7919 + rows*104729) >>> 0;                     // 固定亂數種子，截圖才會每次一樣
+  const rnd = () => (s = (s*1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for(let y=5;y<rows-9;y+=11) for(let x=5;x<cols-9;x+=13){
+    if(rnd() > 0.42) continue;
+    const p = STILLS[(rnd()*STILLS.length)|0];
+    const px = x + ((rnd()*5)|0), py = y + ((rnd()*5)|0);
+    let ok = true;
+    for(const [i,j] of p){
+      for(let b=-2;b<=2 && ok;b++) for(let a=-2;a<=2 && ok;a++){
+        const xx=px+i+a, yy=py+j+b;
+        if(!inField(xx,yy) || lane[yy*cols+xx]) ok = false;
+      }
+      if(!ok) break;
+    }
+    if(!ok) continue;
+    inject(p.map(([i,j]) => [px+i, py+j]));
+    for(const [i,j] of p) stamp(px+i, py+j, 2);                // 佔位，別讓下一個貼太近
+  }
 }
 
-// ── 子網格搬運 ──────────────────────────────────────────────────
-function extract(dx, dy){
-  const s = new Uint8Array(SW*SH);
-  for(let y=0;y<SH;y++) for(let x=0;x<SW;x++) s[y*SW+x] = grid[gidx(dx-PAD+x, dy-PAD+y)];
-  return s;
+// ── 排程：拆掉舊字、蓋出新字 ────────────────────────────────────
+// 兩件事保證每一隻滑翔機的航道上是空的：
+//   拆：由近而遠。北半邊從上往下拆（r 小的先），南半邊從下往上。
+//       航道穿過的那些點陣位置一定 r 更靠邊，早就已經被拆掉了。
+//   蓋：由遠而近。北半邊從第 3 列往第 0 列蓋，南半邊從第 4 列往第 6 列。
+//       航道往外穿過的列都還沒蓋，所以也是空的。
+// 這兩條規則是幾何上成立的，不是試出來的。
+function pull(rec, k){
+  return { cells: rec.cells.map(([x,y]) => [x-rec.dir[0]*k, y-rec.dir[1]*k]),
+           lead: rec.lead + 4*k };
+}
+// 每位數字有一塊自己的領空。橫式時就是整個場；直式時上下兩排數字各分一半，
+// 中線再各退 3 格 —— 不然上排往下丟的和下排往上丟的會在中間對撞。
+function boxOf(d){
+  if(!stack) return [2, 2, cols-3, rows-3];
+  const mid = oy + DH + (GY>>1);
+  return POS[d].y ? [2, mid+3, cols-3, rows-3] : [2, 2, cols-3, mid-3];
+}
+// 在領空裝得下的前提下盡量拉遠，讓滑翔機從遠處飛進來
+function launch(rec, tx, ty, at, box){
+  for(let k=KMAX;k>=0;k--){
+    const p = pull(rec, k);
+    let ok = true;
+    for(const [cx,cy] of p.cells){
+      const x = tx+cx, y = ty+cy;
+      if(x<box[0] || y<box[1] || x>box[2] || y>box[3]){ ok = false; break; }
+    }
+    if(ok) return { g: at - p.lead, cells: p.cells.map(([cx,cy]) => [tx+cx, ty+cy]) };
+  }
+  return null;
 }
 
-function blit(s, dx, dy){
-  for(let y=0;y<SH;y++) for(let x=0;x<SW;x++) grid[gidx(dx-PAD+x, dy-PAD+y)] = s[y*SW+x];
+function planDigit(d, oldCh, newCh, t0){
+  const evs = [], old = glyphBlocks(d, oldCh), nu = glyphBlocks(d, newCh);
+  const box = boxOf(d);
+  let end = t0;
+  for(const [x,y,c,r] of old){
+    const h = r<=3 ? 0 : 1;
+    const at = t0 + (h ? 6-r : r)*DT_DEL;
+    const e = launch(D_DEL[h], x, y, at, box);
+    if(!e) return null;
+    evs.push(e); end = Math.max(end, at);
+  }
+  const tb = t0 + 3*DT_DEL + PHASE_GAP;
+  for(const [x,y,c,r] of nu){
+    const h = r<=3 ? 0 : 1;
+    const at = tb + (h ? r-4 : 3-r)*DT_ADD + c*COL_STAGGER;
+    for(const rec of D_ADD[h]){
+      const e = launch(rec, x, y, at, box);
+      if(!e) return null;
+      evs.push(e);
+    }
+    end = Math.max(end, at);
+  }
+  const first = evs.reduce((m,e) => Math.min(m, e.g), Infinity);
+  if(first <= gen) return null;                    // 來不及發射就別硬幹
+  return { evs, end: end + 4 };
 }
 
-// ── 換位動畫：舊字正放炸成混沌，硬切，新字倒放長回來 ────────────
 function startRun(d, ch){
-  const dx = ox+POS[d].c, dy = oy+POS[d].r;
   want[d] = ch;
-  if(RM){
-    blit(clearGaps(extract(dx,dy), ch), dx, dy);
-    commit(d, ch); rebuildMasks(); scan();
-    return;
+  if(RM){ swapNow(d, ch); return; }
+  const plan = planDigit(d, drawn[d], ch, gen + START_LEAD + d*DIGIT_STAGGER);
+  if(!plan){ swapNow(d, ch); return; }
+  for(const e of plan.evs) queue.push(e);
+  queue.sort((a,b) => a.g - b.g);
+  qi = 0;
+  while(qi < queue.length && queue[qi].g < gen) qi++;   // 已經過去的（不該有）就跳過
+  runs.push({ d, ch, end: plan.end });
+  rebuildBlocks();
+}
+
+// 直接把舊 block 挖掉、新 block 放上去。只有 reduced-motion 和排不出
+// 航道的極端情況會走到這裡。
+function swapNow(d, ch){
+  const x0 = bx(d,0)-2, y0 = by(d,0)-2, x1 = bx(d,4)+3, y1 = by(d,6)+3;
+  for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++)
+    if(inField(x,y)) occ[gi(x,y)] = 0;
+  live = live.filter(i => occ[i]);
+  for(const [x,y] of glyphBlocks(d, ch)) inject([[x,y],[x+1,y],[x,y+1],[x+1,y+1]]);
+  commit(d, ch);
+}
+
+function finishRun(R){
+  // 真的長出來了嗎？沒有的話補上去並記一筆，正常情況這裡永遠是 0。
+  let miss = false;
+  for(const [x,y] of glyphBlocks(R.d, R.ch))
+    if(!(occ[gi(x,y)] && occ[gi(x+1,y)] && occ[gi(x,y+1)] && occ[gi(x+1,y+1)])) { miss = true; break; }
+  if(miss){ heals++; swapNow(R.d, R.ch); return; }
+  commit(R.d, R.ch);
+}
+
+function commit(d, ch){
+  drawn[d] = ch;
+  document.documentElement.dataset.shown = drawn.join('');
+  rebuildBlocks();
+  refreshBright();          // reduced-motion 不跑 tick，這裡不重算就不會亮
+}
+
+// 要畫成亮塊的清單：換位中的那一位，舊字與新字都算，這樣拆掉一塊就暗
+// 一塊、長出一塊就亮一塊。
+function rebuildBlocks(){
+  blocks = [];
+  const seen = new Set();
+  for(let d=0;d<4;d++){
+    const chars = [drawn[d]];
+    if(want[d] !== drawn[d]) chars.push(want[d]);
+    for(const ch of chars) for(const [x,y] of glyphBlocks(d, ch)){
+      const k = y*cols + x;
+      if(!seen.has(k)){ seen.add(k); blocks.push([x,y]); }
+    }
   }
-  const fwd = evolve(sprinkle(extract(dx,dy), 0.15), 12);
-  const rev = evolve(sprinkle(clearGaps(extract(dx,dy), ch), 0.15), 12).reverse();
-  const end = clearGaps(rev[rev.length-1].slice(), ch);
-  runs.push({ d, ch, dx, dy, i:0, frames: fwd.concat(rev, [end]) });
-  rebuildMasks();
+  if(!stack) for(const r of [2,4]) blocks.push([colonX(), by(0,r)]);
+}
+
+// 每代重算一次「哪些細胞屬於一個完整的 2×2 亮塊」。畫格只是讀這張表，
+// 所以亮塊反映的是場上真的長出來的東西，不是我們宣稱它應該在那裡。
+function refreshBright(){
+  for(let n=0;n<brightList.length;n++) bright[brightList[n]] = 0;
+  brightList = [];
+  for(let n=0;n<blocks.length;n++){
+    const x = blocks[n][0], y = blocks[n][1];
+    if(x<0||y<0||x+1>=cols||y+1>=rows) continue;
+    const a = gi(x,y), b = a+1, c = a+cols, e = c+1;
+    if(occ[a] && occ[b] && occ[c] && occ[e]){
+      bright[a]=bright[b]=bright[c]=bright[e]=1;
+      brightList.push(a,b,c,e);
+    }
+  }
+}
+
+function timeStr(){
+  const d = new Date();
+  return String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
 }
 
 function tick(){
-  step(grid, next, cols, rows, true);
-  const t = grid; grid = next; next = t;
-  gen++;
-
-  let done = false;
-  for(let k=runs.length-1;k>=0;k--){
-    const R = runs[k];
-    blit(R.frames[R.i], R.dx, R.dy);
-    if(R.i >= R.frames.length-1){ commit(R.d, R.ch); runs.splice(k,1); done = true; }
-    else R.i++;
-  }
-  if(done) rebuildMasks();
-  applyMasks();
-  scan();
-}
-
-// 只在世代更替時掃一次網格，畫格逐幀重畫這份清單就好。
-// 數字的 block 不進 live：它們另外用 blocks 整塊畫，才畫得出亮度差。
-function scan(){
-  live = []; pop = 0;
-  for(let i=0;i<grid.length;i++) if(grid[i]){ pop++; if(!pin[i]) live.push(i); }
+  while(qi < queue.length && queue[qi].g <= gen){ inject(queue[qi].cells); injected++; qi++; }
+  stepGrid();
+  for(let k=runs.length-1;k>=0;k--)
+    if(gen >= runs[k].end){ finishRun(runs[k]); runs.splice(k,1); }
+  if(!runs.length && qi >= queue.length && queue.length){ queue = []; qi = 0; }
+  refreshBright();
 }
 
 // ── 畫面 ────────────────────────────────────────────────────────
 function draw(){
-  ctx.fillStyle = TRAIL;                         // 不 clearRect：殘影就是 CRT 的鬼影
+  ctx.fillStyle = TRAIL;                           // 不 clearRect：殘影就是 CRT 的鬼影
   ctx.fillRect(0,0,W,H);
 
-  // 背景細胞壓暗。背景自然演化出的 2×2 block 跟數字同形，同色就會把數字淹掉，
-  // 所以靠亮度分層：暗灰是細胞海，純白加光暈的才是時間。
   const s = Math.max(1, Math.round(cell)-1);
   ctx.fillStyle = DIM;
   for(let k=0;k<live.length;k++){
     const i = live[k];
+    if(bright[i]) continue;                        // 亮塊另外整塊畫，才畫得出光暈
     ctx.fillRect(Math.round((i%cols)*cell), Math.round(((i/cols)|0)*cell), s, s);
   }
 
   ctx.fillStyle = FG;
   ctx.shadowColor = FG;
-  ctx.shadowBlur = Math.max(6, cell*1.2);
+  ctx.shadowBlur = Math.max(6, cell*1.6);
   const b = Math.max(2, Math.round(cell*2)-1);
-  for(let k=0;k<blocks.length;k++)              // 一次畫一整塊 2×2，光暈的成本才付得起
-    ctx.fillRect(Math.round(blocks[k][0]*cell), Math.round(blocks[k][1]*cell), b, b);
+  for(let k=0;k<blocks.length;k++){
+    const x = blocks[k][0], y = blocks[k][1];
+    if(x<0||y<0||x+1>=cols||y+1>=rows || !bright[gi(x,y)]) continue;
+    ctx.fillRect(Math.round(x*cell), Math.round(y*cell), b, b);
+  }
   ctx.shadowBlur = 0;
 
   const fs = Math.max(9, Math.round(Math.min(W,H)*0.018));
   const pad = Math.max(10, Math.round(Math.min(W,H)*0.035));
-  ctx.fillStyle = HUD;                           // HUD 比細胞亮、比數字暗，不跟時間搶
+  ctx.fillStyle = HUD;                             // HUD 比細胞亮、比數字暗，不跟時間搶
   ctx.font = fs+'px ui-monospace, Menlo, monospace';
   ctx.textBaseline = 'top';
-  ctx.fillText('> CONWAY LIFE v1.0', pad, pad);
+  ctx.fillText('> CONWAY LIFE v2.0', pad, pad);
   ctx.textBaseline = 'bottom';
-  ctx.fillText('GEN '+gen+'  POP '+pop+'  RULE B3/S23', pad, H-pad);
+  ctx.fillText('GEN '+gen+'  POP '+live.length+'  INJ '+injected+'  RULE B3/S23', pad, H-pad);
 }
 
 // ── PWA ─────────────────────────────────────────────────────────
@@ -313,12 +497,8 @@ if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http'
 addEventListener('resize', layout);
 addEventListener('orientationchange', () => setTimeout(layout, 120));
 
-want = timeStr().split('');
-drawn = want.slice();
-document.documentElement.dataset.shown = drawn.join('');   // 首次載入不播動畫，直接定格
-layout();
+layout();                                          // 首次載入不播動畫，直接把場種好
 
-// 平時 1000ms 一代，畫面心跳就是秒針；換位期間全盤一起加速到 120ms
 let acc = 0, last = performance.now();
 (function frame(now){
   const dt = Math.min(now-last, 500); last = now;
@@ -327,9 +507,11 @@ let acc = 0, last = performance.now();
     if(want[d] !== t[d] && !runs.some(r => r.d === d)) startRun(d, t[d]);
 
   if(runs.length || !RM){
-    acc += dt;
-    const per = runs.length ? 120 : 1000;
-    while(acc >= per){ acc -= per; tick(); }
+    acc += dt * (runs.length ? RUN_HZ : IDLE_HZ) / 1000;
+    let n = Math.min(Math.floor(acc), 40);
+    acc -= n;
+    while(n--) tick();
+    if(acc > 4) acc = 0;                           // 掉幀就認了，不要追到卡死
   }
   draw();
   requestAnimationFrame(frame);

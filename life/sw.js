@@ -1,5 +1,5 @@
 // 生命遊戲時鐘 service worker
-const VERSION = 'life-v1';
+const VERSION = 'life-v2';
 const SHELL = [
   './',
   './index.html',
