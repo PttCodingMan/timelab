@@ -398,15 +398,15 @@ function render(t){
   for(let i=0;i<WID.length;i++){
     if(fT[i] < 0) continue;
     const u = Math.min(1, (t - fT[i])/FALL);
-    // 位移用 smoothstep：兩端的速度都是 0。拉伸跟著速度走（4u(1-u) 是它正規化過的
-    // 導數），所以起跑與落地都是 s=1 —— 剛好接上前後那兩段沒有拉伸的鎖住狀態，
-    // 不然換手的那一幀會「啪」一下抽長。等速或 ease-out 的曲線在起跑點速度最大，
-    // 拉伸沒得歸零，就是為了這個才換掉
-    const e = u*u*(3 - 2*u), s = 1 + STRETCH*4*u*(1 - u);
+    // 位移用重力曲線 u²：起跑 0、落地最快 —— 掉下來的東西不會著地前先煞車，
+    // smoothstep 尾端那段減速讀起來是電梯到站不是墜落；急停交給落地的爆白收掉。
+    // 拉伸不跟速度走（落地時速度最大、歸不了零），用 4u(1-u) 鐘形：
+    // 兩端 s=1，換手的前後幀才接得上沒有拉伸的鎖住狀態
+    const e = u*u, s = 1 + STRETCH*4*u*(1 - u);
     // 錨在舊字的頂：兩片各自對自己的中心拉的話，中段會互相穿過去疊成一團。
     // 空隙也乘同一個 s，整條（新字＋空隙＋舊字）才是一次均勻的拉伸
     const seam = by + e*RISE;
-    if(fOld[i]) drawGlyph(i, fOld[i], seam, s, 1 - u, LEAF, t);
+    if(fOld[i]) drawGlyph(i, fOld[i], seam, s, 1 - e, LEAF, t);
     drawGlyph(i, cur[i], seam - RISE*s, s, 1, LIT, t);
   }
 
