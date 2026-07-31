@@ -10,7 +10,7 @@
 ```
 index.html                展示頁
 tools/                    check / simulate / build / shoot
-galaga/  flip/  bricks/  zen/  fog/   一座時鐘一個資料夾
+galaga/  flip/  bricks/  zen/  fog/  bloom/   一座時鐘一個資料夾
 ├─ index.html             全部邏輯都在這裡
 ├─ clock.json             metadata
 └─ sw.js  manifest.webmanifest  icon-*.png

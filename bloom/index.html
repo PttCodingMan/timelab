@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>潮汐花鐘</title>
+<meta name="description" content="澎湖白沙灘，一整片天人菊。開著的花排成現在幾點，潮水舔上來換掉要變的那幾朵。 A blanketflower field on white sand; the open blooms spell the hour, and the tide swaps only the ones that change.">
+<meta name="theme-color" content="#7fb8dd">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bloom">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<style>
+  :root{
+    --sand:#eadcc0;
+    --text:#4a3524;
+    --line:#bfa47c;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--sand);overflow:hidden;overscroll-behavior:none}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif;
+    color:var(--text);
+    -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #stage{position:fixed;inset:0;background:var(--sand)}
+  canvas{display:block;width:100%;height:100%}
+
+  #ctrl{
+    position:fixed; right:max(16px, env(safe-area-inset-right));
+    bottom:max(16px, env(safe-area-inset-bottom));
+    display:flex; gap:8px;
+    transition:opacity 1.2s ease;
+  }
+  button{
+    font:inherit; font-size:12px; letter-spacing:.08em;
+    color:var(--text); background:rgba(255,252,244,.55); border:1px solid var(--line);
+    padding:8px 12px; border-radius:2px; cursor:pointer; touch-action:manipulation;
+  }
+  button:hover{ background:rgba(255,252,244,.9); }
+  button:focus-visible{ outline:2px solid var(--text); outline-offset:2px; }
+  button[aria-pressed="true"]{ border-color:var(--text); }
+  button[hidden]{ display:none; }
+  body.rest #ctrl{ opacity:0; pointer-events:none; }
+  /* ?embed=1 — 在展示頁的 iframe 裡預覽時只留錶面 */
+  body.embed #ctrl{ display:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+</div>
+<div id="ctrl">
+  <button id="bInstall" hidden>安裝</button>
+  <button id="bWake" aria-pressed="false">防休眠</button>
+  <button id="bFull">全螢幕</button>
+  <button id="bLang">EN</button>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+// ── 語言 ────────────────────────────────────────────────────────
+const EN = { _title:'Tide Bloom Clock', bInstall:'Install', bWake:'Stay awake', bFull:'Fullscreen' };
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if(LANG_EN){
+  document.documentElement.lang = 'en';
+  document.title = EN._title;
+  for(const [k, s] of Object.entries(EN)) document.getElementById(k)?.replaceChildren(s);
+}
+{
+  const b = document.getElementById('bLang');
+  b.textContent = LANG_EN ? '中' : 'EN';
+  b.onclick = () => { localStorage.setItem('clocklab.lang', LANG_EN ? 'zh' : 'en'); location.reload(); };
+}
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// ── 這座鐘只有兩個動力源：陣風與潮汐 ─────────────────────────────
+// 兩者都靜止時整幀必須完全靜止（不是「幅度很小」，是真的 0），否則 tools/shoot.py
+// 拍出來的縮圖每次 bytes 都不一樣 —— 它的 FREEZE 只平移 Date 的原點，時間照樣流動。
+// 所以：會動的東西一律是 w（風）或 reach（潮）的純函數，不是靠累積 rAF 的位移。
+// 亂數全部走 mulberry32（固定 seed），全檔不碰瀏覽器內建的亂數。
+function mul32(a){
+  return () => {
+    a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+// 照 key 查、不照呼叫順序取：同一個位置的花每次重算都要拿到同一個值
+const hash = n => mul32(Math.imul(n * 1000 | 0, 2246822519))();
+const clamp = x => x < 0 ? 0 : x > 1 ? 1 : x;
+const smooth = x => { const t = clamp(x); return t * t * (3 - 2 * t); };
+const TAU = Math.PI * 2;
+
+// ── 色票 ────────────────────────────────────────────────────────
+const SKY_HI = '#7fb8dd', SKY_LO = '#cfe6f0';      // 頂 → 海平線（大氣散射泛白）
+const SEA_FAR = '#3f8fb0', SEA_NEAR = '#1d6e93';
+const SAND_HI = '#f2e6cf', SAND_LO = '#e8d7b8';
+const SAND_WET = '#c9ac86';
+const STEM = '#6e8a5e', LEAF = '#5c7a4a';
+// 沒開的那一株整株往沙色靠、降飽和。開／未開的對比是這座鐘唯一的訊號通道，
+// 背景那片要是跟數字同一個綠、同一個大小，四位數字就淹在紋理裡
+// 但退太多整片沙就空了：這裡只降飽和、不降到沙色，靠落地陰影去拉開「開／未開」
+const STEM_DIM = '#9aa583', LEAF_DIM = '#8e9d71';
+const BUD_A = 0.74;         // 未開花苞的不透明度
+// 落地陰影：正午光壓在正下方、短、偏冷灰（影子裡填的是天空光）
+const SHADE = [104, 106, 118];
+
+// ── 五官都寫死的數字：5×7 點陣 ────────────────────────────────────
+// 不抄 zen 的貝茲筆順 —— 點陣不需要筆順，這是這座鐘比 fog／zen 省下來的地方。
+// 0 中間那道斜槓是故意的：一整片花裡 0 跟 8 只差中間一橫會分不出來
+const G = [
+  ['01110','10001','10011','10101','11001','10001','01110'],
+  ['00100','01100','00100','00100','00100','00100','01110'],
+  ['01110','10001','00001','00010','00100','01000','11111'],
+  ['11111','00010','00100','00010','00001','10001','01110'],
+  ['00010','00110','01010','10010','11111','00010','00010'],
+  ['11111','10000','11110','00001','00001','10001','01110'],
+  ['00110','01000','10000','11110','10001','10001','01110'],
+  ['11111','00001','00010','00100','01000','01000','01000'],
+  ['01110','10001','10001','01110','10001','10001','01110'],
+  ['01110','10001','10001','01111','00001','00010','01100']
+];
+
+// ── 花 ──────────────────────────────────────────────────────────
+const PETALS = 13;          // 費氏數，看起來自然
+const BACKC = 1.40;         // easeOutBack 的過衝係數，峰值約 1.08
+const backEase = x => { const p = x - 1; return 1 + (BACKC + 1) * p * p * p + BACKC * p * p; };
+const TILE = 128, STAGES = 24, VARS = 4;   // sprite atlas：4 種變體 × 24 格開合，3072×512
+// 背景花苞：不是每一格都站一株，也不跟數字一樣大。整片都站滿、尺寸又跟開花差不多的話，
+// 花田會變成一張均勻的紋理，把「開／未開」的對比整個稀釋掉 —— 縮圖上就讀不出數字
+const GRASS_P = 0.56;       // 非數字格的花苞覆蓋率（seeded）
+const GRASS_SZ = 0.76;      // 背景花苞相對數字花的整株大小
+const GAP = 0.92;           // 開花花徑最多吃掉格距的幾成（見 layout()）
+const GZ_MAX = 1.02;        // 數字帶那些花的尺寸抽籤上界
+
+// ── 風：陣風制 ──────────────────────────────────────────────────
+const GUST_CYC = 12;        // 對齊分鐘邊界，每分鐘剛好 5 陣。短於 8s 像被搖，長於 16s 靜止段會悶
+const GUST_SWEEP = 1.9;     // 前緣掃過整片田要花掉一陣風的幾成。規格書那條式子讓前緣剛好在
+                            // 陣風結束時走到最後一欄，等於右半邊整場沒吹到 —— 乘個 1.9 讓前緣
+                            // 在前半段就掃完，後半段全場一起晃，這才是一陣風的樣子
+const GUST_EDGE = 6;        // 前緣寬幾欄。窄了像一條線掃過，寬了看不出方向
+
+// ── 潮：時序（秒）────────────────────────────────────────────────
+const SM  = { climb:1.4, hold:1.8, back:3.0, total:3.5 };   // 小潮：每分鐘 :00
+const BIG = { climb:2.2, hold:2.8, back:4.6, total:5.4 };   // 大潮：每小時 :00:00
+const BLOOM_T = 0.75, WITHER_T = 0.5, DRY = 2.5;
+const SHW = 4.5;            // 水舌左右肩膀的寬度（欄）。2.4 欄的斜坡投影到畫面上幾乎是垂直的，
+                            // 水看起來是一塊圓角矩形；拉寬才有舌頭的斜邊
+
+// ── 狀態 ────────────────────────────────────────────────────────
+// runs 這個名字是硬性的：tools/simulate.js 的探針直接讀 runs.length。
+// 風不算 run（它從不結束），所以無潮時檢查點永遠是 0
+let runs = [], drawn = '', introPending = true;
+let HEADLESS = true, dirty = true, wetAny = false, gustNow = null;
+
+function commit(){ document.documentElement.dataset.shown = drawn; }
+const p2 = n => String(n).padStart(2, '0');
+function timeStr(){ const d = new Date(); return p2(d.getHours()) + p2(d.getMinutes()); }
+
+// 模擬環境只有 id='c' 那張 canvas 有 getContext，createElement 出來的沒有。
+// 任一張開不出來就設 HEADLESS，繪圖整條路徑跳過，狀態機照跑
+function mk(w, h){
+  const e = document.createElement('canvas');
+  const g = e.getContext && e.getContext('2d');
+  if(!g) return null;
+  e.width = w; e.height = h;
+  return { e, g };
+}
+
+// ── 場景與投影 ──────────────────────────────────────────────────
+// 不做真 3D，一個投影函式就夠：花田用 (u,v) 網格，v=0 最遠、v=ROWS-1 最近。
+// SKYH 是真的水平線（天接海），HZ 是岸線 —— 花田最遠那一排剛好長在水邊，
+// 所以大潮推到 v=0 就是「水漲回海裡」，不用另外解釋兩條線的關係
+let W = 0, H = 0, MW = 0, MH = 0, dpr = 1;
+let COLS = 30, ROWS = 11, PORT = false;
+let SKYH = 0, HZ = 0, BAND = 0, FOOT = 0, COLW = 0, HEAD = 0, NOWATER = 13, YB = 0;
+let SLOTS = [], COLON = [], field = [];
+
+// 深度曲線。規格書的 d^1.35 配上 0.35 的縮放，列距與花徑的比值從最遠排到最近排差三倍：
+// 上面幾列黏成一團、下面幾列斷開，一位數字讀起來是兩種筆畫。改成指數曲線，
+// 讓「列距」與「花變小的速度」同一條 —— 整個字從頭到尾同一種筆畫粗細。
+// S0 是最遠那排的縮放，depth(ROWS-1) 剛好是 1。0.55 的透視太兇：欄距幾乎不變
+// （xkOf 只收斂一成多），花徑卻從上到下差 1.43 倍，於是「花徑／格距」在數字帶裡
+// 從 0.66 走到 0.92 —— 要嘛上面幾列小到讀不出來，要嘛下面幾列黏死。0.72 讓花徑
+// 與欄距同步，全帶都吃得滿 0.92 的預算。列距仍然 51→62px，深度感沒有掉。
+// v<0 也要有定義：水舌越過岸線時前緣會跑到海裡去
+const S0 = 0.72, EB = -Math.log(S0), EK = S0 / (1 - S0);
+const depth = v => EK * (Math.exp(EB * v / (ROWS - 1)) - 1);
+// 最遠那排往下讓 FOOT，不然 v=0 的花頭會浮在海面上
+const syOf = v => HZ + FOOT + (BAND - FOOT) * depth(v);
+// 花的大小與欄的橫向收斂拆成兩條曲線。規格書那條 0.35+0.65k 兩件事共用，
+// 結果是一位數字的直筆從上排到下排橫移快兩百像素 —— 整個字被剪成菱形，讀不出來。
+// 深度感交給「花變小 ＋ 列距變密」，橫向只留一成多的收斂，字才立得住
+const scOf = v => Math.max(0.12, S0 + (1 - S0) * depth(v));
+const xkOf = v => 0.86 + 0.14 * depth(v);
+const sxOf = (u, v) => MW / 2 + (u - (COLS - 1) / 2) * COLW * xkOf(v);
+
+// ── 佈局 ────────────────────────────────────────────────────────
+// 橫式 [5 欄數字][1 空][5 欄數字][2 欄冒號][5 欄數字][1 空][5 欄數字] = u 3..26
+// 直式 COLS=11：HH 在 v 2..8、MM 在 v 9..15，冒號省略
+function slotsFor(){
+  return PORT
+    ? [{ d:0, u:0, v:2 }, { d:1, u:6, v:2 }, { d:2, u:0, v:9 }, { d:3, u:6, v:9 }]
+    : [{ d:0, u:3, v:3 }, { d:1, u:9, v:3 }, { d:2, u:16, v:3 }, { d:3, u:22, v:3 }];
+}
+
+function buildField(){
+  field = [];
+  const cell = (u, v) => {
+    // 數字帶：查這一格屬於哪一位數的第幾列第幾欄
+    for(const s of SLOTS){
+      const cx = u - s.u, cy = v - s.v;
+      if(cx >= 0 && cx < 5 && cy >= 0 && cy < 7) return { d: s.d, cx, cy };
+    }
+    return null;
+  };
+  const push = (u, v, sz, kind, dg) => {
+    const s = (u * 131 + v * 17) | 0;
+    const grass = kind === 'grass';
+    // seeded jitter，格線感必須消失，否則它是 LED 看板不是花田。但抖動與筆畫是對立的：
+    // 規格書的 ±0.28 會讓相鄰兩朵最遠差半格多，一筆直畫就斷成一串點。
+    // 花田的隨機感全部交給背景那片（抖 ±0.36），數字帶與野花只留 ±0.11 ——
+    // 筆畫本身不需要隨機感，它需要的是每一點都落在該落的位置
+    const j = grass ? 0.72 : 0.16;
+    field.push({
+      u, v, sz, kind, dg,
+      uu: u + (hash(s * 2 + 1) - 0.5) * j,
+      vv: v + (hash(s * 2 + 2) - 0.5) * j,
+      va: Math.floor(hash(s * 3 + 5) * VARS) % VARS,
+      // atlas 只有 4 種變體，整片田排下去看得出重複。左右鏡射一半、再各自抽一個
+      // 大小 —— 兩件事都不用多存一張圖，變體實際上變成 8 種還帶連續的尺寸差。
+      // 數字帶的尺寸差要收窄：一朵大一朵小，5×7 點陣讀起來就會有的黏有的斷
+      gz: grass ? 0.80 + 0.40 * hash(s * 13 + 29)
+                : GZ_MAX - 0.04 + 0.04 * hash(s * 13 + 29),
+      flip: hash(s * 5 + 23) < 0.5 ? -1 : 1,
+      len: 0.84 + 0.32 * hash(s * 7 + 11),
+      side: hash(s * 11 + 3) < 0.5 ? -1 : 1,
+      bloom: 0, want: 0, mode: null, sub: 0
+    });
+  };
+
+  for(let v = 0; v < ROWS; v++){
+    for(let u = 0; u < COLS; u++){
+      // 冒號那兩格讓位給小花，不然一格裡會插兩朵
+      if(!PORT && (u === 14 || u === 15) && COLON.indexOf(v) >= 0) continue;
+      const dg = cell(u, v);
+      // 最前排與最後排散佈 15% 的野生開花（seeded、終生不變）——
+      // 沒有這一撮，整片田會像個開關板
+      const wild = !dg && (v === 0 || v === ROWS - 1) && hash(u * 29 + v * 7 + 3) < 0.15;
+      // 背景那片抽掉四成：滿格的花苞是一張均勻紋理，稀疏才像野地
+      if(!dg && !wild && hash(u * 41 + v * 23 + 907) >= GRASS_P) continue;
+      // 野花小一號：它是點綴，不該比數字還搶眼（最前排本來就是全畫面最大的花）
+      push(u, v, wild ? 0.82 : dg ? 1 : GRASS_SZ, wild ? 'wild' : dg ? 'digit' : 'grass', dg);
+    }
+  }
+  // 冒號：兩朵 0.7× 的小花，常開不謝
+  if(!PORT) for(const v of COLON){
+    push(14, v, 0.7, 'wild', null);
+    const f = field[field.length - 1];
+    f.uu = 14.5 + (hash(v * 91 + 5) - 0.5) * 0.2;
+  }
+  for(const f of field) if(f.kind === 'wild') f.want = 1;
+  // 由遠到近畫（painter's algorithm），近處的花自然蓋住遠處的，不用 z-buffer
+  field.sort((a, b) => a.vv - b.vv);
+}
+
+// 把 HHMM 寫進每朵花的「該不該開」。冒號與野花不受影響
+function applyTime(str){
+  for(const f of field){
+    if(f.kind !== 'digit') continue;
+    const d = +str[f.dg.d];
+    f.want = G[d][f.dg.cy][f.dg.cx] === '1' ? 1 : 0;
+  }
+}
+
+// ── 一朵天人菊（Gaillardia pulchella）─────────────────────────────
+// 外圈舌狀花瓣末端黃、中段橘紅、心盤深栗色。每片末端 3 齒。
+// 每朵用 seeded random 決定花瓣長短（±12%）與彎度 —— 沒有兩朵一樣
+function petalPath(g, L, w, bd){
+  g.beginPath();
+  g.moveTo(L * 0.10, 0);
+  g.quadraticCurveTo(L * 0.42, w * 0.95 + bd * 0.35, L * 0.80, w * 0.86 + bd);
+  g.quadraticCurveTo(L * 0.95, w * 0.78 + bd, L * 1.00, w * 0.44 + bd);
+  g.quadraticCurveTo(L * 0.90, w * 0.30 + bd, L * 0.89, w * 0.15 + bd);
+  g.quadraticCurveTo(L * 0.99, w * 0.10 + bd, L * 1.06, bd);
+  g.quadraticCurveTo(L * 0.99, -w * 0.10 + bd, L * 0.89, -w * 0.15 + bd);
+  g.quadraticCurveTo(L * 0.90, -w * 0.30 + bd, L * 1.00, -w * 0.44 + bd);
+  g.quadraticCurveTo(L * 0.95, -w * 0.78 + bd, L * 0.80, -w * 0.86 + bd);
+  g.quadraticCurveTo(L * 0.42, -w * 0.95 + bd * 0.35, L * 0.10, 0);
+  g.closePath();
+}
+
+// bloom 0→1 分三段：0.00–0.30 花苞脹大萼片外翻、0.30–0.85 花瓣旋著展開、
+// 0.85–1.00 心盤的黃色管狀花一圈圈亮起
+function gaillardia(g, R, b, sd){
+  const rnd = mul32(1471 + sd * 3607);
+  const LV = [], BD = [];
+  for(let i = 0; i < PETALS; i++){ LV.push(0.88 + 0.24 * rnd()); BD.push((rnd() - 0.5) * 0.9); }
+  const rot = rnd() * TAU;
+
+  const bud = 1 - clamp((b - 0.24) / 0.30);
+  if(bud > 0.002){
+    const bp = clamp(b / 0.30), br = R * (0.19 + 0.17 * bp);
+    g.save();
+    g.globalAlpha = bud;
+    for(let i = 0; i < 6; i++){          // 萼片：一開始包著，bp→1 往外翻
+      g.save(); g.rotate(rot + i / 6 * TAU);
+      g.beginPath();
+      g.moveTo(0, br * 0.15);
+      g.quadraticCurveTo(br * 1.10, -br * 0.40, br * (1.35 + bp * 1.45), -br * 0.10 * (1 + bp));
+      g.quadraticCurveTo(br * 1.15, br * 0.28, 0, br * 0.15);
+      g.closePath();
+      g.fillStyle = i % 2 ? '#5f7d50' : '#6e8a5e'; g.fill();
+      g.strokeStyle = 'rgba(176,64,34,.5)'; g.lineWidth = Math.max(1, R * 0.014); g.stroke();
+      g.restore();
+    }
+    const gb = g.createRadialGradient(-br * 0.3, -br * 0.35, br * 0.12, 0, 0, br);
+    gb.addColorStop(0, '#9db97f'); gb.addColorStop(1, '#4e6b3f');
+    g.beginPath(); g.arc(0, 0, br, 0, TAU); g.fillStyle = gb; g.fill();
+    g.restore();
+  }
+
+  // 13 片舌狀花瓣在外圈只蓋住不到一半的圓周，沙從縫裡漏上來 —— 一朵花縮到 14px
+  // 之後平均亮度只比沙暗一成，四位數字就散成一團橘霧。底下先鋪一層暖橘：
+  // 近看是花瓣根部互相重疊那圈的暗面，縮圖上它才是讓這朵花變成一個實心點的東西
+  const ud = clamp((b - 0.30) / 0.45);
+  if(ud > 0){
+    const ur = R * 1.02 * ud;
+    const gu = g.createRadialGradient(0, 0, ur * 0.15, 0, 0, ur);
+    gu.addColorStop(0, 'rgba(146,50,23,' + (0.96 * ud).toFixed(3) + ')');
+    gu.addColorStop(0.58, 'rgba(172,60,25,' + (0.88 * ud).toFixed(3) + ')');
+    gu.addColorStop(0.86, 'rgba(190,78,28,' + (0.42 * ud).toFixed(3) + ')');
+    gu.addColorStop(1, 'rgba(200,96,32,0)');
+    g.beginPath(); g.arc(0, 0, ur, 0, TAU); g.fillStyle = gu; g.fill();
+  }
+
+  for(let i = 0; i < PETALS; i++){
+    // 第 i 片延遲 i/13*0.15 才開始張 → 旋著開，不是十三片一起彈出來
+    const pi = clamp((b - 0.30 - i / PETALS * 0.15) / 0.412);
+    if(pi <= 0.001) continue;
+    const e = backEase(pi);
+    // 花瓣寬度決定這朵花在縮圖上剩下多少「重量」：13 片 0.135R 的窄瓣在外圈只蓋住
+    // 兩成多的圓周，縮到 15px 之後整朵花平均起來只比沙暗 9%，四位數字就消失了。
+    // 0.18R 讓舌狀花瓣互相搭上（天人菊本來就是這樣長的），花才是一個實心的點
+    const L = R * 0.98 * LV[i] * e, w = R * 0.180 * (0.42 + 0.58 * clamp(e));
+    g.save();
+    g.rotate(rot + i / PETALS * TAU + (1 - pi) * 0.85);
+    // 瓣端那道金黃是天人菊的身分證，不能省。但純黃 #f6c33b 的明度跟白沙只差一成，
+    // 補得寬一點花就跟沙黏在一起 —— 所以往橘金 #f0a91e 這一級移，只在最外緣點一筆
+    // #f6c33b。真正把花從沙上挑起來的是落地陰影，不是靠花瓣自己壓暗
+    const gr = g.createLinearGradient(L * 0.10, 0, L * 1.06, 0);
+    gr.addColorStop(0, '#6d2013');
+    gr.addColorStop(0.40, '#b8351a');
+    gr.addColorStop(0.62, '#d0491a');
+    gr.addColorStop(0.76, '#df7517');
+    gr.addColorStop(0.90, '#f0a91e');
+    gr.addColorStop(1, '#f6c33b');
+    petalPath(g, L, w, BD[i] * w * (1.7 - e));
+    g.fillStyle = gr; g.fill();
+    // 一圈很細、比沙暗的輪廓線。金黃補回來之後瓣端會跟沙化在一起，
+    // 描一道邊等於給每片舌狀花瓣一個自己的剪影，縮圖上花才還是一個實心的點
+    g.strokeStyle = 'rgba(118,38,15,.6)';
+    g.lineWidth = Math.max(0.7, R * 0.026);
+    g.stroke();
+    g.restore();
+  }
+
+  // 心盤要等花苞讓開才露出來。全程都畫的話，一整片沒開的花會變成一片深栗色的點陣，
+  // 比開著的花還搶眼 —— 田是綠的，數字才亮得起來
+  const dsk = clamp((b - 0.20) / 0.18);
+  // 心盤佔花徑的比例是這朵花在縮圖上的「重量」：一圈橘色花瓣縮到 14px 只剩一團淡橘，
+  // 中間那顆深栗色的核才是讓它在沙上站得住的東西。0.30 太秀氣，0.38 才看得見
+  const dr = R * 0.38 * (0.52 + 0.48 * clamp(b / 0.5));
+  if(dsk > 0){
+    g.save();
+    g.globalAlpha = dsk;
+    const gd = g.createRadialGradient(-dr * 0.3, -dr * 0.3, dr * 0.12, 0, 0, dr);
+    gd.addColorStop(0, '#70311d'); gd.addColorStop(1, '#4a1e12');
+    g.beginPath(); g.arc(0, 0, dr, 0, TAU); g.fillStyle = gd; g.fill();
+    g.restore();
+  }
+
+  const fl = clamp((b - 0.85) / 0.15);
+  if(fl > 0) for(let ring = 0; ring < 3; ring++){
+    const on = clamp((fl - ring * 0.28) / 0.44);
+    if(on <= 0) continue;
+    const rr = dr * (0.40 + ring * 0.27), cnt = 7 + ring * 6;
+    g.fillStyle = ring === 2 ? 'rgba(246,195,59,' + on.toFixed(3) + ')'
+                             : 'rgba(226,146,44,' + on.toFixed(3) + ')';
+    for(let j = 0; j < cnt; j++){
+      const a = rot * 1.7 + j / cnt * TAU + ring * 0.4;
+      g.beginPath(); g.arc(Math.cos(a) * rr, Math.sin(a) * rr, dr * 0.085, 0, TAU); g.fill();
+    }
+  }
+}
+
+// ── 離屏：花頭 sprite atlas ＋ 沙的顆粒 texture ────────────────────
+// 330 朵 × 13 片 = 4000+ path/frame 一定掉幀，所以花頭預渲染成 atlas，
+// 畫的時候只有 drawImage ＋ transform；風的傾斜靠 transform，不重畫 path
+let atlas = null, sand = null, sandPat = null, bg = null, shade = null;
+
+// 落地陰影的貼圖：一枚徑向漸層的糊點，畫的時候壓扁成橢圓。
+// 每株一張 drawImage，不用每幀開 330 個 createRadialGradient
+function buildShade(){
+  shade = mk(64, 64);
+  if(!shade) return;
+  const g = shade.g, c = SHADE.join(',');
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(' + c + ',.62)');
+  gr.addColorStop(0.40, 'rgba(' + c + ',.46)');
+  gr.addColorStop(0.72, 'rgba(' + c + ',.16)');
+  gr.addColorStop(1, 'rgba(' + c + ',0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+}
+
+function buildAtlas(){
+  atlas = mk(TILE * STAGES, TILE * VARS);
+  if(!atlas) return;
+  const g = atlas.g;
+  for(let v = 0; v < VARS; v++)
+    for(let s = 0; s < STAGES; s++){
+      g.save();
+      g.translate(s * TILE + TILE / 2, v * TILE + TILE / 2);
+      gaillardia(g, TILE * 0.435, s / (STAGES - 1), v);
+      g.restore();
+    }
+}
+
+function buildSand(){
+  sand = mk(256, 256);
+  if(!sand) return;
+  const g = sand.g, img = g.createImageData(256, 256), d = img.data, rnd = mul32(77213);
+  for(let i = 0; i < 256 * 256; i++){
+    const n = rnd(), dark = rnd() < 0.5;
+    const a = n < 0.55 ? 0 : (n - 0.55) / 0.45;       // 大部分透明，少數亮／暗顆粒
+    d[i * 4] = dark ? 122 : 255;
+    d[i * 4 + 1] = dark ? 104 : 251;
+    d[i * 4 + 2] = dark ? 82 : 240;
+    d[i * 4 + 3] = Math.round(a * a * 54);
+  }
+  g.putImageData(img, 0, 0);
+  sandPat = ctx.createPattern(sand.e, 'repeat');
+}
+
+// 地被：整片沙鋪一層短草。這是「一整片花海」的底 —— 花田本身只有一格一株，
+// 一株再大也蓋不滿一格，把花苞放大去填只會黏住數字的筆畫。改成鋪紋理就沒有這個代價：
+// 它進 bg（靜態離屏、每幀零成本），明度只比沙暗一階、顆粒細到縮圖上糊成一片草綠，
+// 遠看是「被植被蓋著的沙」，不是一堆跟數字搶注意力的深色點
+function groundCover(g){
+  const rnd = mul32(60317);
+  g.lineCap = 'round';
+  // v 均勻抽會全部塞到遠處：syOf 是指數的，一半的 v 值擠在最上面兩成的畫面裡，
+  // 前景就空了。改抽 depth（也就是螢幕上的縱向位置）均勻，再反解回 v，密度才鋪得平
+  const vOfD = d => (ROWS - 1) / EB * Math.log(1 + d / EK);
+  for(let i = 0; i < 9600; i++){
+    const v = vOfD(-0.04 + rnd() * 1.16), u = -3 + rnd() * (COLS + 6);
+    const x = sxOf(u, Math.min(v, ROWS - 1)), y = syOf(v);
+    if(y < HZ + FOOT * 0.4 || y > MH + 20) continue;
+    const s = scOf(v), L = HEAD * s * (0.34 + 0.52 * rnd());
+    g.strokeStyle = rnd() < 0.5 ? 'rgba(142,154,106,.34)' : 'rgba(168,174,128,.28)';
+    g.lineWidth = Math.max(1, HEAD * s * 0.032);
+    g.beginPath();
+    const lean = (rnd() - 0.5) * 0.6;
+    for(let b = 0; b < 4; b++){
+      const a = -Math.PI / 2 + lean + (rnd() - 0.5) * 0.95, bl = L * (0.55 + 0.6 * rnd());
+      g.moveTo(x, y);
+      g.quadraticCurveTo(x + Math.cos(a) * bl * 0.42, y + Math.sin(a) * bl * 0.86,
+                         x + Math.cos(a) * bl, y + Math.sin(a) * bl * 0.52);
+    }
+    g.stroke();
+  }
+}
+
+// 天、海、乾沙都是靜態的，一次畫進離屏，每幀只 drawImage 一張
+function buildBg(){
+  bg = mk(MW, MH);
+  if(!bg) return;
+  const g = bg.g;
+  const sky = g.createLinearGradient(0, 0, 0, SKYH);
+  sky.addColorStop(0, SKY_HI); sky.addColorStop(1, SKY_LO);
+  g.fillStyle = sky; g.fillRect(0, 0, MW, SKYH + 1);
+
+  const sea = g.createLinearGradient(0, SKYH, 0, HZ);
+  sea.addColorStop(0, SEA_FAR); sea.addColorStop(1, SEA_NEAR);
+  g.fillStyle = sea; g.fillRect(0, SKYH, MW, HZ - SKYH + 1);
+
+  const sd = g.createLinearGradient(0, HZ, 0, MH);
+  sd.addColorStop(0, SAND_LO); sd.addColorStop(0.35, SAND_HI); sd.addColorStop(1, SAND_LO);
+  g.fillStyle = sd; g.fillRect(0, HZ, MW, MH - HZ);
+  if(sandPat){ g.fillStyle = sandPat; g.fillRect(0, HZ, MW, MH - HZ); }
+
+  groundCover(g);
+
+  // 岸線那道永遠在的碎浪：海跟沙之間不能是一條硬邊
+  const fo = g.createLinearGradient(0, HZ - BAND * 0.016, 0, HZ + BAND * 0.020);
+  fo.addColorStop(0, 'rgba(255,255,255,0)');
+  fo.addColorStop(0.45, 'rgba(255,255,255,.78)');
+  fo.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = fo; g.fillRect(0, HZ - BAND * 0.016, MW, BAND * 0.036);
+}
+
+// ── 風 ──────────────────────────────────────────────────────────
+// 無風是預設狀態。週期 12s、對齊分鐘邊界，每分鐘剛好 5 陣；
+// dur 3.5～4.5s 之間，剩下 7～8s 的無風窗口留給截圖
+function gustOf(ms){
+  const secs = ms / 1000, min = Math.floor(secs / 60);
+  const t = secs - min * 60, k = Math.floor(t / GUST_CYC);
+  const gi = min * 5 + k;                       // 每一陣自己的性格
+  const onset = k * GUST_CYC + hash(gi * 3 + 1);
+  const dur = 3.5 + hash(gi * 3 + 2);
+  const tau = t - onset;
+  if(tau <= 0 || tau >= dur) return null;       // 陣風之間 w 恆等於 0，不是很小的值
+  return { tau, dur, amp: 0.6 + 0.4 * hash(gi * 3 + 3) };
+}
+
+// 相位跟 u 綁，陣風才看得出是從左掃過去的一道波，不是整片同時晃
+function windAt(g, u, v){
+  if(!g) return 0;
+  const e = Math.pow(Math.sin(Math.PI * g.tau / g.dur), 1.6);   // 兩端都是 0，接得平滑
+  const lead = (g.tau / g.dur) * GUST_SWEEP * (COLS + 8) - 8;
+  const local = Math.min(Math.max(lead - u, 0), GUST_EDGE) / GUST_EDGE;
+  return g.amp * e * local * (0.55 + 0.45 * Math.sin(g.tau * 7 - u * 0.4 - v * 0.15));
+}
+
+// ── 潮 ──────────────────────────────────────────────────────────
+// 水舌不是整條橫線，是一片有寬度的舌狀水，只在「這次要變動的欄位」範圍內爬上來。
+// reach 0 = 沒有水，1 = 爬到最深；front(u) 是那一欄的水緣落在第幾列（小 = 遠 = 深）
+function reachAt(r){
+  const T = r.mode === 'small' ? SM : BIG, t = r.t;
+  if(t <= 0) return 0;
+  if(t < T.climb) return 1 - Math.pow(1 - t / T.climb, 2.2);    // 衝上來：快進慢停
+  if(t < T.hold) return 1;
+  if(t < T.back) return 1 - smooth((t - T.hold) / (T.back - T.hold));
+  return 0;
+}
+
+function shoulder(r, u){
+  if(u >= r.uA && u <= r.uB) return 1;          // 要變的花一定被蓋到，肩膀只往外長
+  const d = (u < r.uA ? r.uA - u : u - r.uB) / SHW;
+  return d >= 1 ? 0 : smooth(1 - d);
+}
+
+// 每欄再深一點點的舌狀起伏。只會更深、不會更淺，覆蓋才有保證；
+// 相鄰欄之間平滑內插，不然邊緣會是 0.14 欄一階的鋸齒
+function lobeAt(r, u){
+  const i = Math.floor(u), t = u - i;
+  const a = hash(i * 13 + r.ls), b = hash((i + 1) * 13 + r.ls);
+  return 0.6 * (a + (b - a) * smooth(t));
+}
+
+function frontAt(r, u){
+  const s = shoulder(r, u);
+  if(s <= 0) return NOWATER;
+  return NOWATER + (r.vT - lobeAt(r, u) - NOWATER) * r.reach * s;
+}
+
+// ── 泡沫與被吹走的花瓣 ──────────────────────────────────────────
+// 兩種都有 lifetime，潮汐動畫結束前必須全部消光 —— 靜止窗口裡不能有任何東西在飄
+const foam = [], petals = [];
+
+function spawnFoam(r, x, y, n, sp){
+  for(let i = 0; i < n && foam.length < 300; i++){
+    const a = r.rnd() * TAU, s = sp * (0.25 + 0.75 * r.rnd());
+    foam.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s * 0.4 - sp * 0.3,
+                t: 0, life: 0.35 + 0.55 * r.rnd(), r: (0.05 + 0.10 * r.rnd()) * COLW });
+  }
+}
+
+function spawnPetals(f, r){
+  const n = 2 + Math.floor(r.rnd() * 3);        // 謝花時 2～4 片脫落，各自的速度
+  for(let i = 0; i < n && petals.length < 260; i++)
+    petals.push({ x: f.hx, y: f.hy, rot: r.rnd() * TAU, vr: (r.rnd() - 0.5) * 7,
+                  vx: (r.rnd() - 0.45) * COLW * 1.3, vy: -COLW * (0.15 + 0.55 * r.rnd()),
+                  t: 0, life: 1.5 + 1.0 * r.rnd(), L: f.r * 0.34,
+                  c: r.rnd() < 0.5 ? '#e0631f' : '#f0b93f' });
+}
+
+function stepParticles(dt){
+  for(let i = foam.length - 1; i >= 0; i--){
+    const p = foam[i];
+    p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += COLW * 0.9 * dt;
+    if(p.t >= p.life) foam.splice(i, 1);
+  }
+  for(let i = petals.length - 1; i >= 0; i--){
+    const p = petals[i];
+    p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vy += COLW * 1.6 * dt; p.rot += p.vr * dt;
+    if(p.t >= p.life) petals.splice(i, 1);
+  }
+}
+
+// ── 濕沙 ────────────────────────────────────────────────────────
+// 每個取樣點記「水最深爬到哪」與「還有多濕」。水離開之後 2.5s 線性乾回 0，
+// 之後不再變化 —— 這條決定了縮圖的靜止窗口從第幾秒才真的開始
+let wu = [], wv = [], wa = [];
+function buildWet(){
+  const N = 110;
+  wu = []; wv = []; wa = [];
+  for(let i = 0; i < N; i++){
+    wu.push(-3.5 + (COLS + 6) * i / (N - 1));
+    wv.push(NOWATER); wa.push(0);
+  }
+}
+
+function soak(r, dt){
+  let any = false;
+  for(let i = 0; i < wu.length; i++){
+    let live = false;
+    if(r && r.reach > 0){
+      const fv = frontAt(r, wu[i]);
+      if(fv < wv[i]) wv[i] = fv;
+      if(fv <= ROWS - 1){ wa[i] = 1; live = true; }
+    }
+    if(!live){
+      wa[i] = Math.max(0, wa[i] - dt / DRY);
+      if(wa[i] <= 0) wv[i] = NOWATER;
+    }
+    if(wa[i] > 0) any = true;
+  }
+  wetAny = any;
+}
+
+// ── 一輪潮汐 ────────────────────────────────────────────────────
+function start(to){
+  const mode = introPending ? 'intro' : (to.slice(2) === '00' ? 'big' : 'small');
+  introPending = false;
+  const old = field.map(f => f.want);
+  applyTime(to);
+
+  const r = { to, mode, t: mode === 'intro' ? BIG.hold : 0, reach: 0, op: [], cl: [],
+              wrote: 0, ls: (+to + 7) * 3 + 1, rnd: mul32(20260730 + (+to) * 13) };
+
+  for(const f of field){ f.sub = 0; f.mode = null; }
+  if(mode === 'small'){
+    for(let i = 0; i < field.length; i++){
+      const f = field[i];
+      if(f.want !== old[i]) (f.want ? r.op : r.cl).push(f);
+    }
+    if(!r.op.length && !r.cl.length){ drawn = to; commit(); return; }
+    let u0 = 1e9, u1 = -1e9, v0 = 1e9;
+    for(const f of r.op.concat(r.cl)){
+      u0 = Math.min(u0, f.uu); u1 = Math.max(u1, f.uu); v0 = Math.min(v0, f.vv);
+    }
+    // 爬到最深那朵要變的花再多半列
+    r.uA = u0 - 0.5; r.uB = u1 + 0.5; r.vT = v0 - 0.5;
+  }else{
+    // 大潮／進場：蓋全場，所有開著的花重來一次 —— 退下去時整片田由遠到近開
+    for(const f of field){ if(f.want) r.op.push(f); else if(f.bloom > 0) r.cl.push(f); }
+    r.uA = -3; r.uB = COLS + 2; r.vT = -1.6;   // 越過岸線，水緣直接接回海裡
+  }
+  // 沒被水點到的花（上一輪沒收完的殘局）自己補完，不然會停在半開
+  for(const f of field){
+    if(r.op.indexOf(f) >= 0 || r.cl.indexOf(f) >= 0) continue;
+    if(f.want && f.bloom < 1) f.mode = 'open';
+    else if(!f.want && f.bloom > 0) f.mode = 'close';
+  }
+  runs.length = 0;
+  runs.push(r);
+}
+
+function touch(r, f, role){
+  const fv = frontAt(r, f.uu);
+  if(!f.sub){
+    if(fv <= f.vv){                             // 水舌覆蓋到它的那一幀開始 wither
+      f.sub = 1; f.mode = 'close';
+      if(f.bloom > 0.5) spawnPetals(f, r);
+    }
+    return;
+  }
+  // 水舌退離某朵花的那一幀，那朵花開始 bloom —— stagger 是水退的副作用，不另外寫
+  if(role === 1 && fv > f.vv && f.bloom < 1) f.mode = 'open';
+}
+
+function grow(dt){
+  for(const f of field){
+    if(f.mode === 'open'){ f.bloom = Math.min(1, f.bloom + dt / BLOOM_T); if(f.bloom >= 1) f.mode = null; }
+    else if(f.mode === 'close'){ f.bloom = Math.max(0, f.bloom - dt / WITHER_T); if(f.bloom <= 0) f.mode = null; }
+  }
+}
+
+function step(r, dt){
+  r.t += dt;
+  r.reach = reachAt(r);
+  for(const f of r.op) touch(r, f, 1);
+  for(const f of r.cl) touch(r, f, 2);
+  if(r.reach > 0) edgeFoam(r, dt);
+
+  // dataset.shown 寫在「最後一朵新花的 bloom ≥ 0.6」那一幀 ——
+  // 已經看得出是花、不是還在脹的苞，也不是決定要換的那一刻
+  if(!r.wrote && r.op.every(f => f.bloom >= 0.6) && r.cl.every(f => f.bloom <= 0.4)){
+    r.wrote = 1; drawn = r.to; commit();
+  }
+  const T = r.mode === 'small' ? SM : BIG;
+  if(r.t >= T.total && r.op.every(f => f.bloom >= 1) && r.cl.every(f => f.bloom <= 0)
+     && !foam.length && !petals.length){
+    if(!r.wrote){ drawn = r.to; commit(); }
+    for(const f of field){ f.sub = 0; if(f.mode) f.mode = null; }
+    runs.length = 0;
+  }
+}
+
+// 前緣那一排白泡沫點。生成量跟著水緣的速度走，停在最高點時就少
+let lastReach = 0;
+function edgeFoam(r, dt){
+  const dv = Math.abs(r.reach - lastReach) / Math.max(dt, 1e-4);
+  lastReach = r.reach;
+  const n = Math.min(7, Math.round((0.6 + dv * 4) * (r.mode === 'small' ? 1 : 2.2)));
+  for(let i = 0; i < n; i++){
+    const u = r.uA - SHW + (r.uB - r.uA + SHW * 2) * r.rnd();
+    const fv = frontAt(r, u);
+    if(fv >= NOWATER - 0.05) continue;
+    spawnFoam(r, sxOf(u, Math.min(fv, ROWS - 1)), syOf(fv), 1, COLW * 1.1);
+  }
+}
+
+// ── 畫 ──────────────────────────────────────────────────────────
+// 每幀先把每朵花的位置算好，莖／葉／花頭三趟共用，不重算三次
+function place(){
+  for(const f of field){
+    const sc = scOf(f.vv) * f.sz;
+    const x0 = sxOf(f.uu, f.vv), y0 = syOf(f.vv);
+    const w = windAt(gustNow, f.uu, f.vv);
+    // 莖高跟著開花走。沒開的那些如果站得跟開花一樣高，數字的空心（0 的洞、4 的角）
+    // 就被一根一根等高的莖填滿 —— 縮圖上整個字變成一塊實心的斑。抽高才開花，
+    // 這也是天人菊真的長法；bloom 是穩定量，靜止窗口裡它不會動
+    const len = HEAD * 0.85 * sc * f.len * (0.52 + 0.48 * f.bloom);
+    f.x0 = x0; f.y0 = y0; f.sc = sc; f.w = w; f.len2 = len;
+    f.hx = x0 + w * 0.30 * COLW * sc;           // 莖尖偏移
+    f.hy = y0 - len;
+    // 開花那一刻整株才長到全尺寸：芽 0.80 倍、開花 1.12 倍。差的那 0.32 讓
+    // 沒開的格子退成一顆小點，數字的空心才空得乾淨
+    f.r = HEAD * sc * f.gz * (0.80 + 0.32 * f.bloom);
+    f.dim = f.bloom < 0.02 && !f.want;               // 這一株現在是背景，不是訊號
+  }
+}
+
+// 落地陰影：正午光 → 每一株在自己腳邊投一枚短而柔的冷灰影。這一刀同時解兩件事 ——
+// 花與沙的分離度改由「明度階差」提供，瓣端的金黃就不必再為了跟白沙拉開而讓位；
+// 整片田也因為接了地而長出體積，不再像一片貼在沙上的色紙。
+// 它只吃 f.r／f.x0／f.hx／f.bloom，全是靜止窗口裡不會變的量，所以影子跟花一樣不動
+function drawShadows(){
+  for(const f of field){
+    const rx = f.r * 1.02, ry = f.r * 0.42;
+    const cx = f.x0 + (f.hx - f.x0) * 0.70, cy = f.y0 + f.r * 0.16;
+    // 沒開的那些影子淡一階：它們是地被，不是訊號
+    if(f.dim) ctx.globalAlpha = 0.6;
+    ctx.drawImage(shade.e, cx - rx, cy - ry, rx * 2, ry * 2);
+    if(f.dim) ctx.globalAlpha = 1;
+  }
+}
+
+// 莖：330 條收成一條 path、一次 fill()。填的是帶錐度的多邊形而不是 stroke，
+// 因為一次 stroke 只有一個 lineWidth，遠處的莖會跟近處一樣粗
+// 兩趟：沒開的那些先用沙色系畫掉，開著的再用正常的綠疊上去
+function drawStems(){
+  for(let pass = 0; pass < 2; pass++){
+    ctx.beginPath();
+    for(const f of field){
+      if(f.dim !== !pass) continue;
+      const hw = Math.max(0.5, 0.055 * HEAD * f.sc);
+      const cx = f.x0 + (f.hx - f.x0) * 0.30, cy = f.y0 - f.len2 * 0.55;
+      ctx.moveTo(f.x0 - hw, f.y0);
+      ctx.quadraticCurveTo(cx - hw * 0.6, cy, f.hx - hw * 0.28, f.hy);
+      ctx.lineTo(f.hx + hw * 0.28, f.hy);
+      ctx.quadraticCurveTo(cx + hw * 0.6, cy, f.x0 + hw, f.y0);
+      ctx.closePath();
+    }
+    ctx.fillStyle = pass ? STEM : STEM_DIM; ctx.fill();
+  }
+}
+
+// 葉：開花的一片，朝背風側（風把葉尖往下風處推），同樣一條 path 一次 fill()
+function leafPath(bx, by, tx, ty, w){
+  ctx.moveTo(bx, by);
+  ctx.quadraticCurveTo(bx + (tx - bx) * 0.45, by - w, tx, ty);
+  ctx.quadraticCurveTo(bx + (tx - bx) * 0.35, by + w * 0.9, bx, by);
+  ctx.closePath();
+}
+
+function drawLeaves(){
+  for(let pass = 0; pass < 2; pass++){
+    ctx.beginPath();
+    for(const f of field){
+      if(f.dim !== !pass) continue;
+      const bx = f.x0 + (f.hx - f.x0) * 0.42, by = f.y0 - f.len2 * 0.42;
+      const L = HEAD * 0.46 * f.sc, w = L * 0.30;
+      const sw = f.w * 0.35 * COLW * f.sc;
+      leafPath(bx, by, bx + f.side * L + sw, by + L * 0.34, w);
+    }
+    ctx.fillStyle = pass ? LEAF : LEAF_DIM; ctx.fill();
+  }
+}
+
+// 花頭：只有 drawImage ＋ transform。風的傾斜與花盤的透視壓縮都靠 transform
+function drawHeads(){
+  for(const f of field){
+    const st = Math.max(0, Math.min(STAGES - 1, Math.round(f.bloom * (STAGES - 1))));
+    const w = f.w, wilt = f.mode === 'close' && f.bloom > 0;
+    const al = f.dim ? BUD_A : 1;
+    if(!w && !wilt && f.flip > 0){               // 靜止時連 transform 都不設，省得浮點抖
+      if(al !== 1) ctx.globalAlpha = al;
+      ctx.drawImage(atlas.e, st * TILE, f.va * TILE, TILE, TILE,
+                    f.hx - f.r, f.hy - f.r, f.r * 2, f.r * 2);
+      if(al !== 1) ctx.globalAlpha = 1;
+      continue;
+    }
+    ctx.save();
+    ctx.globalAlpha = al;
+    ctx.translate(f.hx, f.hy);
+    if(f.flip < 0) ctx.scale(-1, 1);
+    if(w){ ctx.rotate(w * 0.25); ctx.scale(1, 1 - 0.18 * Math.abs(w)); }
+    if(wilt){                                   // 謝花：下垂、褪色、變薄
+      ctx.globalAlpha = 0.28 + 0.72 * f.bloom;
+      ctx.translate(0, f.r * 0.18 * (1 - f.bloom));
+      ctx.scale(1, 0.66 + 0.34 * f.bloom);
+    }
+    ctx.drawImage(atlas.e, st * TILE, f.va * TILE, TILE, TILE, -f.r, -f.r, f.r * 2, f.r * 2);
+    ctx.restore();
+  }
+}
+
+// 海面的白浪紋。位移乘 w，所以無風＝鏡面，紋路一格都不動
+function drawSea(){
+  const rnd = mul32(4423);
+  ctx.lineCap = 'round';
+  for(let i = 0; i < 34; i++){
+    const fy = rnd(), x = rnd() * MW, len = (0.03 + 0.09 * rnd()) * MW;
+    const y = SKYH + (HZ - SKYH) * (0.10 + 0.86 * fy * fy);
+    const xx = x + windAt(gustNow, (x / MW) * COLS, 0) * 0.03 * MW;
+    ctx.strokeStyle = 'rgba(255,255,255,' + (0.10 + 0.28 * fy).toFixed(3) + ')';
+    ctx.lineWidth = Math.max(1, (0.6 + 1.8 * fy) * dpr);
+    ctx.beginPath(); ctx.moveTo(xx, y); ctx.lineTo(xx + len * (0.6 + 0.4 * fy), y); ctx.stroke();
+  }
+}
+
+// 濕沙：水爬到過的地方壓深一階，再疊一層天空色低 alpha 的高光（反射）
+function drawWet(){
+  let a = 0;
+  for(let i = 0; i < wa.length; i++) if(wa[i] > a) a = wa[i];
+  if(a <= 0) return;
+  let top = MH;
+  ctx.beginPath();
+  for(let i = 0; i < wu.length; i++){
+    // 濕的是沙，不是海：水緣越過岸線的那一段不算進來
+    const v = Math.min(Math.max(wv[i], 0), NOWATER), y = syOf(v);
+    const x = sxOf(wu[i], Math.min(v, ROWS - 1));
+    if(y < top) top = y;
+    if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.lineTo(sxOf(wu[wu.length - 1], ROWS - 1) + MW, YB);
+  ctx.lineTo(sxOf(wu[0], ROWS - 1) - MW, YB);
+  ctx.closePath();
+  ctx.save(); ctx.clip();
+  ctx.globalAlpha = a * 0.85;
+  ctx.fillStyle = SAND_WET; ctx.fillRect(0, top, MW, MH - top);
+  ctx.globalAlpha = a;
+  const gl = ctx.createLinearGradient(0, top, 0, MH);
+  gl.addColorStop(0, 'rgba(207,230,240,.34)');
+  gl.addColorStop(0.5, 'rgba(190,218,232,.16)');
+  gl.addColorStop(1, 'rgba(190,218,232,.05)');
+  ctx.fillStyle = gl; ctx.fillRect(0, top, MW, MH - top);
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function drawWater(){
+  const r = runs[0];
+  if(!r || r.reach <= 0) return;
+  const u0 = r.uA - SHW, u1 = r.uB + SHW, N = 96;
+  const px = [], py = [];
+  let top = MH * 4;
+  for(let i = 0; i <= N; i++){
+    const u = u0 + (u1 - u0) * i / N;
+    const fv = Math.min(frontAt(r, u), NOWATER);
+    const y = syOf(fv);
+    px.push(sxOf(u, Math.min(fv, ROWS - 1))); py.push(y);
+    if(y < top) top = y;
+  }
+  ctx.beginPath();
+  ctx.moveTo(px[0], py[0]);
+  for(let i = 1; i <= N; i++) ctx.lineTo(px[i], py[i]);
+  ctx.lineTo(px[N] + MW, YB); ctx.lineTo(px[0] - MW, YB);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(0, top, 0, MH);
+  g.addColorStop(0, 'rgba(238,250,252,.92)');
+  g.addColorStop(0.05, 'rgba(170,214,222,.80)');
+  g.addColorStop(0.35, 'rgba(112,170,190,.62)');
+  g.addColorStop(1, 'rgba(84,138,164,.48)');
+  ctx.fillStyle = g; ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(px[0], py[0]);
+  for(let i = 1; i <= N; i++) ctx.lineTo(px[i], py[i]);
+  ctx.strokeStyle = 'rgba(255,255,255,.85)';
+  ctx.lineWidth = Math.max(1.5, COLW * 0.10);
+  ctx.lineJoin = 'round'; ctx.stroke();
+}
+
+function drawParticles(){
+  for(const p of foam){
+    const k = 1 - p.t / p.life;
+    ctx.globalAlpha = Math.pow(k, 0.6) * 0.9;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (0.5 + 0.5 * k), 0, TAU); ctx.fill();
+  }
+  for(const p of petals){
+    const k = 1 - p.t / p.life;
+    ctx.globalAlpha = Math.pow(k, 0.7);
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+    ctx.fillStyle = p.c;
+    ctx.beginPath(); ctx.ellipse(0, 0, p.L, p.L * 0.32, 0, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// 過曝：海邊的正午本來就洗掉一層對比，頂部再加一圈很淡的光暈。
+// 但它是蓋在花上面的：原本的 .10 平洗 ＋ .34 光暈剛好蓋在數字帶最上面兩列，
+// 把已經只剩一成的花／沙對比再吃掉一截。氛圍留著，強度砍半
+function drawGlare(){
+  ctx.fillStyle = 'rgba(255,248,235,.05)';
+  ctx.fillRect(0, 0, MW, MH);
+  const g = ctx.createRadialGradient(MW * 0.5, -MH * 0.12, 0, MW * 0.5, -MH * 0.12, MH * 0.7);
+  g.addColorStop(0, 'rgba(255,252,240,.20)');
+  g.addColorStop(1, 'rgba(255,252,240,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, MW, MH * 0.6);
+}
+
+function render(){
+  if(HEADLESS) return;
+  ctx.drawImage(bg.e, 0, 0);
+  drawSea();
+  drawWet();
+  place();
+  drawShadows();
+  drawStems(); drawLeaves(); drawHeads();
+  drawWater();
+  drawParticles();
+  drawGlare();
+}
+
+// ── 版面 ────────────────────────────────────────────────────────
+function layout(){
+  W = cv.clientWidth || 1; H = cv.clientHeight || 1;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  MW = Math.round(W * dpr); MH = Math.round(H * dpr);
+  cv.width = MW; cv.height = MH;
+
+  PORT = MH > MW;
+  // 橫式 13 列不是 11 列：列距 = (BAND-FOOT)/(ROWS-1)，11 列時是 62px，而欄距只有
+  // 48px —— 同一朵花在橫向填得滿、在縱向永遠差一截，5×7 的直筆會斷成一串點。
+  // 13 列把列距壓到 43～51px，格子接近正方，筆畫兩個方向一樣連
+  COLS = PORT ? 11 : 30; ROWS = PORT ? 17 : 13;
+  SLOTS = slotsFor();
+  // 冒號跟著數字帶走：7 列的字帶從 SLOTS[0].v 起算，兩點落在第 3、5 列才在字高的中間
+  COLON = PORT ? [] : [SLOTS[0].v + 2, SLOTS[0].v + 4];
+  NOWATER = ROWS + 2;
+  SKYH = 0.10 * MH; HZ = 0.22 * MH; BAND = MH - HZ; FOOT = BAND * 0.05;
+  // 欄寬由「最近那一排數字要塞得進畫面」反推，剩下的排自然往兩側溢出去，
+  // 最前排被畫面切掉一截才像一片田，不是一塊擺好的看板
+  const vD = SLOTS[SLOTS.length - 1].v + 6, span = PORT ? 10 : 23;
+  COLW = MW * 0.92 / (span * xkOf(vD));
+  // 開花的花徑必須小於格距的 GAP 倍，5×7 點陣的筆畫之間才留得住「空」。這條是這座鐘
+  // 可讀性的關鍵：原本 HEAD=0.86·COLW，相鄰兩朵重疊近一半，一位數字糊成一團橘色。
+  // 花瓣尖端畫到 sprite 的邊，所以畫出來的直徑就是 2·HEAD·sc(v)·gz·1.12。
+  // 橫式卡在欄距、直式卡在列距（17 列擠在同一片沙上），寫死一個係數一定有一邊失守 ——
+  // 數字帶每一列的兩個方向都算過取最小，換版面也不會破
+  HEAD = Infinity;
+  for(const s of SLOTS) for(let v = s.v; v <= s.v + 6; v++){
+    const pitch = Math.min(COLW * xkOf(v), (BAND - FOOT) * (depth(v + 1) - depth(v)));
+    HEAD = Math.min(HEAD, GAP * pitch / (2 * scOf(v) * GZ_MAX * 1.12));
+  }
+  YB = syOf(NOWATER) + BAND * 0.1;
+
+  buildField();
+  buildWet();
+  buildSand();
+  buildAtlas();
+  buildShade();
+  buildBg();
+  HEADLESS = !(atlas && sand && bg && sandPat && shade);
+
+  foam.length = 0; petals.length = 0;
+  runs.length = 0; drawn = ''; introPending = true; dirty = true;
+}
+
+// ── 主迴圈 ──────────────────────────────────────────────────────
+let last = 0;
+function frame(now){
+  // dt 夾住負值：rAF 給的時間戳可能早於啟動時讀到的 performance.now()
+  const dt = Math.min(Math.max((now - last) / 1000, 0), 0.12);
+  last = now;
+  gustNow = gustOf(Date.now());
+
+  const t = timeStr(), r = runs[0];
+  // 時間變了就吃掉最新目標、手上那輪直接重跑，不排隊 —— 連跳好幾分鐘也會收斂
+  if(t !== (r ? r.to : drawn)) start(t);
+  else if(r) step(r, dt);
+  soak(runs[0], dt);
+  grow(dt);
+  stepParticles(dt);
+
+  const busy = runs.length > 0 || gustNow || wetAny || foam.length > 0 || petals.length > 0;
+  // 無風又無潮的時候整幀一模一樣，重畫只是燒電；停畫也順便保證縮圖的 bytes 穩定
+  if(busy || dirty){ render(); dirty = !!busy; }
+  requestAnimationFrame(frame);
+}
+
+// ── 控制 ────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const bWake = $('bWake'), bFull = $('bFull'), bInstall = $('bInstall');
+
+bFull.onclick = () => {
+  if(document.fullscreenElement) document.exitFullscreen();
+  else $('stage').requestFullscreen?.();
+};
+
+let wl = null, keepAwake = false;
+async function setWake(on){
+  keepAwake = on;
+  bWake.setAttribute('aria-pressed', String(on));
+  try{
+    if(on && 'wakeLock' in navigator){ wl = await navigator.wakeLock.request('screen'); }
+    else if(wl){ await wl.release(); wl = null; }
+  }catch(_){}
+}
+bWake.onclick = () => setWake(!keepAwake);
+document.addEventListener('visibilitychange', () => {
+  if(keepAwake && document.visibilityState === 'visible') setWake(true);
+});
+
+let deferred = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; bInstall.hidden = false; });
+bInstall.onclick = async () => {
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice;
+  deferred = null; bInstall.hidden = true;
+};
+addEventListener('appinstalled', () => { bInstall.hidden = true; });
+
+let restTimer = null;
+function wake(){
+  document.body.classList.remove('rest');
+  clearTimeout(restTimer);
+  restTimer = setTimeout(() => document.body.classList.add('rest'), 3000);
+}
+['pointermove','pointerdown','keydown','touchstart'].forEach(ev => addEventListener(ev, wake, {passive:true}));
+wake();
+
+let rz = null;
+addEventListener('resize', () => {
+  clearTimeout(rz);
+  rz = setTimeout(layout, 150);
+});
+
+// 被展示頁 iframe 嵌入時不註冊 sw、不留控制列
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+layout();
+last = performance.now();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
