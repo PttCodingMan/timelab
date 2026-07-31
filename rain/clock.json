@@ -1,0 +1,16 @@
+{
+  "id": "rain",
+  "name": "數位雨時鐘",
+  "tagline": "字元一柱一柱往下掉，掉到筆畫上就白亮一下停住，時間是被這場雨寫出來的",
+  "name_en": "Digital Rain Clock",
+  "tagline_en": "Columns of characters fall through the dark; each one that lands on a stroke flares white and freezes, so the rain writes the time itself",
+  "created": "2026-07-31",
+  "tags": ["canvas", "terminal", "pwa"],
+  "accent": "#2bf07a",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-31T02:35:07+08:00",
+    "settle": 2400
+  }
+}

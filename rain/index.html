@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>數位雨時鐘</title>
+<meta name="description" content="半形片假名一柱一柱往下掉，掉到筆畫上就白亮一下、停在那裡不走了 —— 時間是被這場雨一格一格寫出來的。 Columns of halfwidth katakana fall through the dark; when a drop lands on a stroke it flares white and freezes there, so the rain itself writes the time.">
+<meta name="theme-color" content="#020604">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Rain">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png">
+<style>
+  :root{
+    --ink:#020604;
+    --text:#8ce8b0;
+    --line:#1c5c38;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--ink);overflow:hidden;overscroll-behavior:none}
+  body{
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color:var(--text);
+    -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #stage{position:fixed;inset:0;background:var(--ink)}
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+  /* 映像管的掃描線與暗角。這兩樣不會動，交給合成器貼一層就好 ——
+     畫進 canvas 的話等於每幀多兩次全螢幕填色，橫式 2x 下量得到掉幀 */
+  #stage::after{
+    content:''; position:absolute; inset:0; pointer-events:none;
+    background:
+      repeating-linear-gradient(to bottom, rgba(0,0,0,.22) 0 1px, transparent 1px 3px),
+      radial-gradient(ellipse 72% 72% at 50% 50%, rgba(0,0,0,0) 30%, rgba(0,0,0,.62) 100%);
+  }
+
+  #ctrl{
+    position:fixed; right:max(16px, env(safe-area-inset-right));
+    bottom:max(16px, env(safe-area-inset-bottom));
+    display:flex; gap:8px;
+    transition:opacity 1.2s ease;
+  }
+  button{
+    font:inherit; font-size:12px; letter-spacing:.08em;
+    color:var(--text); background:transparent; border:1px solid var(--line);
+    padding:8px 12px; border-radius:2px; cursor:pointer; touch-action:manipulation;
+  }
+  button:hover{ background:var(--line); }
+  button:focus-visible{ outline:2px solid var(--text); outline-offset:2px; }
+  button[aria-pressed="true"]{ border-color:var(--text); }
+  button[hidden]{ display:none; }
+  body.rest #ctrl{ opacity:0; pointer-events:none; }
+  /* ?embed=1 — 在展示頁的 iframe 裡預覽時只留錶面 */
+  body.embed #ctrl{ display:none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+</div>
+<div id="ctrl">
+  <button id="bInstall" hidden>安裝</button>
+  <button id="bWake" aria-pressed="false">防休眠</button>
+  <button id="bFull">全螢幕</button>
+  <button id="bLang">EN</button>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+// ── 語言 ────────────────────────────────────────────────────────
+const EN = { _title:'Digital Rain Clock', bInstall:'Install', bWake:'Stay awake', bFull:'Fullscreen' };
+const LANG_EN = (localStorage.getItem('clocklab.lang')
+              || (navigator.language.startsWith('zh') ? 'zh' : 'en')) === 'en';
+if(LANG_EN){
+  document.documentElement.lang = 'en';
+  document.title = EN._title;
+  for(const [k, s] of Object.entries(EN)) document.getElementById(k)?.replaceChildren(s);
+}
+{
+  const b = document.getElementById('bLang');
+  b.textContent = LANG_EN ? '中' : 'EN';
+  b.onclick = () => { localStorage.setItem('clocklab.lang', LANG_EN ? 'zh' : 'en'); location.reload(); };
+}
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// ── 色票 ────────────────────────────────────────────────────────
+// 磷光綠自己調的一組：底色不是純黑，帶一點綠的餘燼，關掉的映像管本來就不是死黑。
+// 尾巴不換色相，只掉 alpha —— 疊在這個底色上自然就沉成暗綠，比手動內插兩個顏色穩
+const BG   = '#020604';
+const LEAF = '43,240,122';        // 本色（accent）
+const HEAD = '198,255,224';       // 頭部：綠得幾乎發白
+const LIT  = '228,255,242';       // 已經被雨鎖住的筆畫。比雨的頭還白一階 ——
+                                  // 螢幕上最亮的東西必須是時間，不是隨便一顆雨頭
+const POP  = '255,255,255';       // 鎖住那一瞬間的爆白
+const BED  = 0.32;                // 鎖住那格先鋪的一層綠底。只畫字的話字與字之間留縫，
+                                  // 兩格厚的橫畫會散成一排點；鋪滿整格才連得成一條筆畫
+const FILL = 0.95;                // 鎖住的字撐到格子的幾成。雨裡的字只有 0.4 格寬，
+                                  // 差這一階粗細，前景才不會跟背景糊在一起
+// 時間那一排的框內，雨壓到半成。壓不夠的話筆畫格與非筆畫格的字亮度接近，
+// 字形就散進雨裡 —— 雨照樣穿過去，只是讓到看不見
+const VEIL = 0.05;
+
+// ── 字符集 ──────────────────────────────────────────────────────
+// 半形片假名（U+FF66–）＋拉丁大寫＋數字。半形假名是 narrow 寬度，在等寬字裡
+// 剛好一格，跟拉丁字母混排不會把格子撐開。I/O 拿掉：跟 1/0 在小字級下分不出來
+const CHARS = ('ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ'
+             + 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789').split('');
+
+// ── 6×10 點陣字模 ───────────────────────────────────────────────
+// 自己排的一套，只要 0-9 跟冒號。每一筆都是兩格厚 —— 一格厚的字模在這個尺寸下
+// 會退化成一串孤立的點，橫是橫豎是豎得看得出來，字才連得起來。
+// 冒號佔兩欄，兩點各兩格高，上下留白也各兩格，整個直向對稱 ——
+// 冒號歪一格，整排數字看起來就會像沒對齊
+const GLYPH = {
+  '0':['.####.','######','##..##','##..##','##..##','##..##','##..##','##..##','######','.####.'],
+  '1':['..##..','.###..','####..','..##..','..##..','..##..','..##..','..##..','######','######'],
+  '2':['.####.','######','##..##','....##','...###','..###.','.###..','##....','######','######'],
+  '3':['.####.','######','##..##','....##','..####','..####','....##','##..##','######','.####.'],
+  '4':['##..##','##..##','##..##','##..##','##..##','######','######','....##','....##','....##'],
+  '5':['######','######','##....','##....','#####.','######','....##','##..##','######','.####.'],
+  '6':['..####','.####.','##....','##....','#####.','######','##..##','##..##','######','.####.'],
+  '7':['######','######','....##','...##.','...##.','..##..','..##..','.##...','.##...','.##...'],
+  '8':['.####.','######','##..##','##..##','######','######','##..##','##..##','######','.####.'],
+  '9':['.####.','######','##..##','##..##','######','.#####','....##','....##','######','.####.'],
+  ':':['..','..','##','##','..','..','##','##','..','..']
+};
+
+// HH:MM:SS 的欄位配置：數字六欄、冒號兩欄，每個字之間空一欄
+const WID = [6,6,2,6,6,2,6,6];
+const POS = [];
+{ let x = 0; for(const w of WID){ POS.push(x); x += w + 1; } }
+const GW = POS[7] + 6, GH = 10;   // 47 × 10
+// 秒那兩位不進 dataset.shown（約定三只要 HHMM），所以先記住 HH:MM 佔到哪一欄
+const HM_END = POS[5];
+
+// ── 節奏 ────────────────────────────────────────────────────────
+const SWAP = 2.4;        // 一格平均每秒換幾次字。相位逐格錯開，所以看起來是零星在跳，
+                         // 不是整柱一起翻牌
+const FLASH = 0.16;      // 鎖住那一下的爆白衰減時間
+// ponytail: 雨是隨機的，某一格的正上方剛好沒有柱子在掉的時候，那一畫可能好幾秒都
+// 補不上 —— 秒數每秒換一次，等不起。所以另外派一道虛擬的雨頭掃過字模：一樣由上往下，
+// 掃到哪一列，那一列的新筆畫才寫上、舊筆畫才熄掉。
+// 「雨寫出來的」是質感，「這一秒讀得出來」是規格，衝突的時候規格贏 —— 掃完十列
+// 只花 0.55 s（一列約 55 ms，肉眼看得到一格一格長），剩下的大半秒整個數字是完整的。
+// 舊版是一個平的 250 ms 門檻，等於大半個數字同時被點亮，寫的過程整個看不見
+const SWEEP = 0.55;
+
+// ── 固定種子的偽亂數 ────────────────────────────────────────────
+// 每根柱子的速度、長度、相位都走這支。用內建 Math.random 的話 CI 每次重拍縮圖
+// 背景都長不一樣，thumbnail 的 diff 會被雜訊洗版
+function mul32(a){
+  return () => {
+    a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+// 三個整數雜湊成一個。字元不照呼叫順序抽、照 (欄, 列, 第幾輪) 查表，
+// 所以同一格在同一輪一定拿到同一個字 —— 不必替五千格各存一份狀態
+function ih(a, b, c){
+  let h = Math.imul(a ^ 0x9e3779b9, 0x85ebca6b);
+  h = Math.imul(h ^ b ^ h >>> 13, 0xc2b2ae35);
+  h = Math.imul(h ^ c ^ h >>> 16, 0x27d4eb2f);
+  return (h ^ h >>> 15) >>> 0;
+}
+
+// ── 版面 ────────────────────────────────────────────────────────
+// 全部用裝置像素算。CELL 由「時間那一排要佔多寬」反推，所以不管視窗多大多小，
+// 數字永遠是畫面寬的七成四，欄數自然落在 60 上下
+let W=0, H=0, MW=0, MH=0, dpr=1, CELL=0, cols=0, rows=0, ox=0, oy=0, bx=0, by=0;
+let spd=null, len=null, cyc=null, off=null, hp=null;        // 每根柱子
+let st=null, lt=null, chI=null;                             // 每一格：狀態、時刻、鎖住的字
+let gidx=null, want=null;                                   // 字模格 → 網格索引、目前該亮哪些
+let glow=null, HEADLESS=true;
+let FONT='';
+let fsx=null, fsy=null, fcx=null, fcy=null;                 // 每個字撐滿一格要的縮放與偏移
+
+// 模擬環境裡只有 id='c' 那張 canvas 有 getContext，createElement 出來的沒有。
+// 任一張開不出來就進 HEADLESS：畫圖整條路徑跳過，狀態機照跑
+function mk(w, h){
+  const e = document.createElement('canvas');
+  const g = e.getContext && e.getContext('2d');
+  if(!g) return null;
+  e.width = Math.max(1, w); e.height = Math.max(1, h);
+  return { e, g };
+}
+
+// 量每個字的實際墨水框，換算成「把它撐到整格那麼大」要的縮放與偏移。
+// 只在重排時量一次：字級固定、字集只有八十幾個，比每幀 measureText 便宜太多。
+// 拉伸是非等比的 —— 半形假名本來就窄，等比放大只會撐高不會填滿，
+// 而這裡要的是實心的筆畫不是端正的字。actualBoundingBox 拿不到就退回不縮放
+function fit(){
+  const n = CHARS.length, target = CELL*FILL;
+  fsx = new Float64Array(n); fsy = new Float64Array(n);
+  fcx = new Float64Array(n); fcy = new Float64Array(n);
+  ctx.font = FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for(let i=0;i<n;i++){
+    let w = 0, h = 0, cx = 0, cy = 0;
+    try{
+      const m = ctx.measureText(CHARS[i]);
+      const l = m.actualBoundingBoxLeft,  r = m.actualBoundingBoxRight;
+      const a = m.actualBoundingBoxAscent, d = m.actualBoundingBoxDescent;
+      w = l + r; h = a + d; cx = (r - l)/2; cy = (d - a)/2;
+    }catch(_){}
+    const ok = w > 0.01 && h > 0.01 && isFinite(w) && isFinite(h);
+    // 上限 8：某些字型會把標點的墨水框回成接近 0，不夾住的話會放大成一片白
+    fsx[i] = ok ? Math.min(8, target/w) : 1; fsy[i] = ok ? Math.min(8, target/h) : 1;
+    fcx[i] = ok ? cx : 0;                    fcy[i] = ok ? cy : 0;
+  }
+}
+
+function layout(){
+  W = cv.clientWidth || 1; H = cv.clientHeight || 1;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  MW = Math.round(W*dpr); MH = Math.round(H*dpr);
+  cv.width = MW; cv.height = MH;
+
+  // 時間佔畫面寬的幾成，反推格子大小。字模是 47 欄，同樣佔七成多的寬度，
+  // 一格會比 39 欄那版小一截 —— 一個數字由 6×10 格構成而不是 5×7 攤開，
+  // 密度上來了才讀得出筆畫。直式的寬度是稀缺資源，讓時間幾乎佔滿。
+  // 高度那項只在極扁的視窗才接手；下限 MW/240 是防呆：視窗高度趨近 0 的時候，
+  // 不讓格子細到把網格開成幾十萬格
+  CELL = Math.max(Math.min(MW*(MH > MW ? 0.94 : 0.74)/GW, MH*0.42/GH), MW/240);
+  cols = Math.max(GW, Math.floor(MW/CELL));
+  rows = Math.max(GH, Math.floor(MH/CELL));
+  ox = (MW - cols*CELL)/2; oy = (MH - rows*CELL)/2;
+  bx = Math.max(0, Math.round((cols - GW)/2));
+  by = Math.max(0, Math.round((rows - GH)/2));
+  FONT = Math.round(CELL*0.88) + 'px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  fit();
+
+  const t = clock();
+  const rnd = mul32(20260731);
+  spd = new Float64Array(cols); len = new Int32Array(cols);
+  cyc = new Float64Array(cols); off = new Float64Array(cols); hp = new Float64Array(cols);
+  for(let c=0;c<cols;c++){
+    // 速度用「畫面高度的幾分之幾」算，不用固定的每秒幾格：直式版面的格子小很多，
+    // 照格數給速度的話手機上會變成一場慢動作的雨
+    spd[c] = (0.22 + rnd()*0.42)*rows;
+    // 長度也照畫面高度算，不用固定格數：直式有一百多列，固定 8–26 格的尾巴只蓋得住
+    // 一成多的高度，整面看起來稀稀落落。上限 48 是為了每幀的 fillText 次數
+    len[c] = Math.min(48, Math.round(rows*(0.18 + rnd()*0.34)));
+    // 一輪比畫面高一截：多出來的那段是柱與柱之間的空檔，每根長度不同才不會整排同步。
+    // 空檔要留得夠大（至少半個畫面高），不然每一柱幾乎永遠都有雨，整面糊成一片綠
+    cyc[c] = rows + len[c] + rows*(0.5 + rnd()*1.3);
+    off[c] = rnd()*cyc[c];
+    // 上一幀的頭就從現在的位置起算。放 -1 的話第一幀會把整根柱子從第 0 列掃到頭，
+    // 等於進場那一瞬間整排數字被憑空點亮 —— 開場也該是雨寫出來的（或走 fallback）
+    hp[c] = (t*spd[c] + off[c]) % cyc[c];
+  }
+
+  const n = cols*rows;
+  st = new Uint8Array(n); lt = new Float64Array(n); chI = new Int32Array(n);
+  gidx = new Int32Array(GW*GH);
+  for(let r=0;r<GH;r++) for(let k=0;k<GW;k++){
+    const gr = by + r, gc = bx + k;
+    gidx[r*GW+k] = (gr < rows && gc < cols) ? gr*cols + gc : -1;
+  }
+
+  glow = mk(Math.max(1, Math.round(MW/3)), Math.max(1, Math.round(MH/3)));
+  HEADLESS = !glow;
+
+  // 重排等於整面重下：現在該亮的每一格都退回「等雨」，虛擬雨頭會在 SWEEP 秒內掃完
+  cur = timeStr();
+  want = mask(cur);
+  for(let j=0;j<want.length;j++){
+    const i = gidx[j];
+    if(want[j] && i >= 0){ st[i] = 1; lt[i] = t; }
+  }
+  drawn = '';
+}
+
+// ── 時間與字模 ──────────────────────────────────────────────────
+const T0 = Date.now();
+// 相對開頁的秒數。直接拿 epoch 毫秒去乘速度取模的話，1.8e12 這個量級會把
+// 小數位吃光，雨會變成一格一格跳
+function clock(){ return (Date.now() - T0)/1000; }
+
+function timeStr(){
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+function mask(s){
+  const m = new Uint8Array(GW*GH);
+  for(let i=0;i<8;i++){
+    const g = GLYPH[s[i]], w = WID[i], x0 = POS[i];
+    for(let r=0;r<GH;r++)
+      for(let k=0;k<w;k++) if(g[r][k] === '#') m[r*GW + x0 + k] = 1;
+  }
+  return m;
+}
+
+// ── 狀態 ────────────────────────────────────────────────────────
+// 一格四種狀態：0 還在下雨、1 是筆畫但還沒被寫到、2 已經鎖住、
+// 3 不再是筆畫、正在等雨頭把它帶走（將熄）。1→2 與 3→0 都只在雨頭掃過那一格時發生，
+// 所以寫上跟抹掉是同一個方向、同一道波前。
+// runs 這個名字是硬性的：tools/simulate.js 的探針直接讀 runs.length。
+// 這裡放「HH:MM 還沒寫出來的格子」，寫完就是 0，跟回報的值同一件事 ——
+// 將熄的格子不算未寫完，它已經不屬於現在這個數字了
+let cur = '', drawn = '', runs = [];
+
+function pick(c, r, t){
+  return ih(c, r, Math.floor(t*SWAP + ih(c, r, 7)/4294967296)) % CHARS.length;
+}
+
+function lock(c, r, i, t){
+  st[i] = 2; lt[i] = t; chI[i] = pick(c, r, t);
+}
+
+// 虛擬雨頭掃到字模第 gr 列要多久（從那一格開始等的那一刻起算）。
+// 每根柱子加一個固定的相位差，不然整排八個字會像一條掃描線平平地壓下去；
+// 相位差是位置的雜湊不是亂數，同一個版面每次重跑都一樣
+function front(k, gr){ return SWEEP*(gr + ih(bx + k, 0, 91)/4294967296)/GH; }
+
+// 秒／分換的時候只動真的變了的格子：8 換成 9 共用的那幾畫留著不放，
+// 整位重寫的話秒數每秒閃一次，讀起來是壞掉的燈管不是雨
+function remask(s, t){
+  const nw = mask(s);
+  for(let j=0;j<nw.length;j++){
+    const i = gidx[j];
+    if(i < 0) continue;
+    // 不再是筆畫 → 不是一幀掉回雨裡，是先標成將熄，等雨頭掃過那一格才真的熄。
+    // 還沒被寫到的（st 1）畫面上本來就只有雨，沒有東西要被帶走，直接退場
+    if(want[j] && !nw[j]){ if(st[i] === 2){ st[i] = 3; lt[i] = t; } else st[i] = 0; }
+    else if(!want[j] && nw[j]){ st[i] = 1; lt[i] = t; }
+  }
+  want = nw;
+}
+
+// 第 c 根柱子此刻的頭在第幾列（浮點，可能在畫面外）
+function head(c, t){ return (t*spd[c] + off[c]) % cyc[c]; }
+
+function tick(t){
+  const s = timeStr();
+  if(s !== cur){ remask(s, t); cur = s; }
+
+  // 頭掃過哪幾列。只看「現在在哪一格」會漏：直式版面一幀掉超過一格，
+  // 所以拿上一幀的位置算一段區間，整段都算掃過
+  for(let c=0;c<cols;c++){
+    const h = head(c, t);
+    const a = h < hp[c] ? -1 : hp[c];                 // 折返回頂端：從第 0 列重新算
+    const r1 = Math.min(rows-1, Math.floor(h));
+    for(let r=Math.max(0, Math.floor(a)+1); r<=r1; r++){
+      const i = r*cols + c;
+      if(st[i] === 1) lock(c, r, i, t);
+      else if(st[i] === 3) st[i] = 0;               // 舊筆畫被雨頭啃掉，掉回雨裡
+    }
+    hp[c] = h;
+  }
+
+  runs.length = 0;
+  for(let j=0;j<want.length;j++){
+    const i = gidx[j];
+    if(i < 0) continue;
+    const k = j%GW, gr = j/GW|0;
+    if(!want[j]){
+      // 將熄的格子一樣要有上限：慢的柱子好幾秒才回來一趟，舊筆畫不能賴在那裡不走
+      if(st[i] === 3 && t - lt[i] >= front(k, gr)) st[i] = 0;
+      continue;
+    }
+    if(st[i] === 2) continue;
+    if(t - lt[i] >= front(k, gr)){ lock(bx + k, by + gr, i, t); continue; }
+    if(k < HM_END) runs.push(j);
+  }
+}
+
+// ── 畫 ──────────────────────────────────────────────────────────
+function render(t){
+  const g = ctx;
+  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+  g.fillStyle = BG; g.fillRect(0, 0, MW, MH);
+  g.font = FONT; g.textAlign = 'center'; g.textBaseline = 'middle';
+
+  // 雨。每根柱子從頭往上鋪，alpha 指數衰減，尾端落在 e^-3.9 ≈ 2%，
+  // 再往上就看不見了 —— 所以不必畫滿整根，len 之外直接不進迴圈
+  for(let c=0;c<cols;c++){
+    const h = head(c, t), hr = Math.floor(h), L = len[c];
+    const x = ox + (c + 0.5)*CELL, k0 = Math.max(0, hr - rows + 1);
+    const inC = c >= bx && c < bx + GW;
+    for(let k=k0; k<=L; k++){
+      const r = hr - k;
+      if(r < 0) break;
+      const i = r*cols + c;
+      if(st[i] === 2) continue;                       // 鎖住的格子由下面那段負責
+      const v = inC && r >= by && r < by + GH ? VEIL : 1;
+      g.fillStyle = k === 0 ? 'rgba(' + HEAD + ',' + v.toFixed(3) + ')'
+                            : 'rgba(' + LEAF + ',' + (v*Math.exp(-3.9*k/L)).toFixed(3) + ')';
+      g.fillText(CHARS[pick(c, r, t)], x, oy + (r + 0.5)*CELL);
+    }
+  }
+
+  // 將熄的舊筆畫，同樣兩趟，畫在鎖住的下面。亮度一進這個狀態就掉一階，再隨著
+  // 雨頭逼近衰減到 0 —— 殘影要是跟新筆畫一樣白，5 換 6 的過場會疊成第三個數字，
+  // 讀出來是錯的。顏色也從 LIT（近白）換回 LEAF（雨的綠），退回雨裡的路上
+  for(let j=0;j<gidx.length;j++){
+    const i = gidx[j];
+    if(i < 0 || st[i] !== 3) continue;
+    const f = Math.max(0, 1 - (t - lt[i])/front(j%GW, j/GW|0));
+    g.fillStyle = 'rgba(' + LEAF + ',' + (BED*0.45*f).toFixed(3) + ')';
+    g.fillRect(ox + (bx + j%GW)*CELL, oy + (by + (j/GW|0))*CELL, CELL + 0.8, CELL + 0.8);
+  }
+  for(let j=0;j<gidx.length;j++){
+    const i = gidx[j];
+    if(i < 0 || st[i] !== 3) continue;
+    const f = Math.max(0, 1 - (t - lt[i])/front(j%GW, j/GW|0));
+    const n = chI[i];
+    const x = ox + (bx + j%GW + 0.5)*CELL, y = oy + (by + (j/GW|0) + 0.5)*CELL;
+    g.setTransform(fsx[n], 0, 0, fsy[n], x, y);
+    g.fillStyle = 'rgba(' + LEAF + ',' + (0.55*f).toFixed(3) + ')';
+    g.fillText(CHARS[n], -fcx[n], -fcy[n]);
+  }
+  g.setTransform(1, 0, 0, 1, 0, 0);
+
+  // 鎖住的筆畫，兩趟。第一趟把整格鋪成綠底：一格厚的字外面留著縫的話，
+  // 兩格厚的橫畫還是會斷成一排點。多鋪的 0.8 是讓相鄰兩格咬住，不留髮絲縫
+  g.fillStyle = 'rgba(' + LEAF + ',' + BED + ')';
+  for(let j=0;j<want.length;j++){
+    if(!want[j]) continue;
+    const i = gidx[j];
+    if(i < 0 || st[i] !== 2) continue;
+    g.fillRect(ox + (bx + j%GW)*CELL, oy + (by + (j/GW|0))*CELL, CELL + 0.8, CELL + 0.8);
+  }
+  // 第二趟把字拉滿整格疊上去，白核落在綠底上。剛鎖上的那一下再疊一層更白的
+  // 衰減掉 —— 直接把顏色從白內插回綠也行，但疊一層才留得住底下那個字的邊緣
+  for(let j=0;j<want.length;j++){
+    if(!want[j]) continue;
+    const i = gidx[j];
+    if(i < 0 || st[i] !== 2) continue;
+    const n = chI[i], ch = CHARS[n];
+    const x = ox + (bx + j%GW + 0.5)*CELL, y = oy + (by + (j/GW|0) + 0.5)*CELL;
+    // 用 setTransform 而不是 save/restore：這裡每幀跑兩三百格，省下兩趟狀態堆疊
+    g.setTransform(fsx[n], 0, 0, fsy[n], x, y);
+    g.fillStyle = 'rgba(' + LIT + ',1)';
+    g.fillText(ch, -fcx[n], -fcy[n]);
+    const f = 1 - (t - lt[i])/FLASH;
+    if(f > 0){
+      g.fillStyle = 'rgba(' + POP + ',' + Math.min(1, f).toFixed(3) + ')';
+      g.fillText(ch, -fcx[n], -fcy[n]);
+    }
+  }
+  // 底下的 bloom 要把整張 canvas 縮圖貼回自己身上，變換沒收乾淨會連縮圖一起歪
+  g.setTransform(1, 0, 0, 1, 0, 0);
+
+  // bloom：把剛畫好的整張縮到三分之一、糊掉，再用 lighter 加回自己身上。
+  // 不另開一張離屏畫字再貼兩次 —— 那樣每幀多兩趟全螢幕搬運，而磷光本來就沒有
+  // 高頻細節，縮小再放大看不出來。加法混色不會把亮處推暗，正是磷光的行為
+  const q = glow.g, gw = glow.e.width, gh = glow.e.height;
+  q.globalCompositeOperation = 'source-over';
+  q.clearRect(0, 0, gw, gh);
+  q.filter = 'blur(' + (1.6*dpr).toFixed(2) + 'px)';
+  q.drawImage(cv, 0, 0, gw, gh);
+  q.filter = 'none';
+
+  g.globalCompositeOperation = 'lighter';
+  g.globalAlpha = 0.5;
+  g.drawImage(glow.e, 0, 0, MW, MH);
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
+}
+
+// 約定三：數字真的畫上去之後才回報，不是決定要換的時候
+function commit(){
+  if(runs.length) return;
+  const v = cur.slice(0, 2) + cur.slice(3, 5);
+  if(v !== drawn){ drawn = v; document.documentElement.dataset.shown = v; }
+}
+
+function frame(){
+  const t = clock();
+  tick(t);
+  if(!HEADLESS) render(t);
+  commit();
+  requestAnimationFrame(frame);
+}
+
+// ── 控制 ────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const bWake = $('bWake'), bFull = $('bFull'), bInstall = $('bInstall');
+
+bFull.onclick = () => {
+  if(document.fullscreenElement) document.exitFullscreen();
+  else $('stage').requestFullscreen?.();
+};
+
+let wl = null, keepAwake = false;
+async function setWake(on){
+  keepAwake = on;
+  bWake.setAttribute('aria-pressed', String(on));
+  try{
+    if(on && 'wakeLock' in navigator){ wl = await navigator.wakeLock.request('screen'); }
+    else if(wl){ await wl.release(); wl = null; }
+  }catch(_){}
+}
+bWake.onclick = () => setWake(!keepAwake);
+document.addEventListener('visibilitychange', () => {
+  if(keepAwake && document.visibilityState === 'visible') setWake(true);
+});
+
+let deferred = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; bInstall.hidden = false; });
+bInstall.onclick = async () => {
+  if(!deferred) return;
+  deferred.prompt(); await deferred.userChoice;
+  deferred = null; bInstall.hidden = true;
+};
+addEventListener('appinstalled', () => { bInstall.hidden = true; });
+
+let restTimer = null;
+function wake(){
+  document.body.classList.remove('rest');
+  clearTimeout(restTimer);
+  restTimer = setTimeout(() => document.body.classList.add('rest'), 3000);
+}
+['pointermove','pointerdown','keydown','touchstart'].forEach(ev => addEventListener(ev, wake, {passive:true}));
+wake();
+
+let rz = null;
+addEventListener('resize', () => {
+  clearTimeout(rz);
+  rz = setTimeout(layout, 150);
+});
+
+// 被展示頁 iframe 嵌入時不註冊 sw、不留控制列
+const EMBED = new URLSearchParams(location.search).has('embed');
+if(EMBED) document.body.classList.add('embed');
+
+if(!EMBED && 'serviceWorker' in navigator && location.protocol.startsWith('http')){
+  addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+
+layout();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
