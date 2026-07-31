@@ -133,25 +133,25 @@ const GLYPH = {
   ':':['..','..','##','##','..','..','##','##','..','..']
 };
 
-// HH:MM:SS 的欄位配置：數字六欄、冒號兩欄，每個字之間空一欄
-const WID = [6,6,2,6,6,2,6,6];
+// HH:MM 的欄位配置：數字六欄、冒號兩欄，每個字之間空一欄
+const WID = [6,6,2,6,6];
 const POS = [];
 { let x = 0; for(const w of WID){ POS.push(x); x += w + 1; } }
-const GW = POS[7] + 6, GH = 10;   // 47 × 10
-// 秒那兩位不進 dataset.shown（約定三只要 HHMM），所以先記住 HH:MM 佔到哪一欄
-const HM_END = POS[5];
+const GW = POS[4] + 6, GH = 10;   // 30 × 10
 
 // ── 節奏 ────────────────────────────────────────────────────────
 const SWAP = 2.4;        // 一格平均每秒換幾次字。相位逐格錯開，所以看起來是零星在跳，
                          // 不是整柱一起翻牌
-const FLASH = 0.16;      // 鎖住那一下的爆白衰減時間
-// ponytail: 雨是隨機的，某一格的正上方剛好沒有柱子在掉的時候，那一畫可能好幾秒都
-// 補不上 —— 秒數每秒換一次，等不起。所以另外派一道虛擬的雨頭掃過字模：一樣由上往下，
-// 掃到哪一列，那一列的新筆畫才寫上、舊筆畫才熄掉。
-// 「雨寫出來的」是質感，「這一秒讀得出來」是規格，衝突的時候規格贏 —— 掃完十列
-// 只花 0.55 s（一列約 55 ms，肉眼看得到一格一格長），剩下的大半秒整個數字是完整的。
-// 舊版是一個平的 250 ms 門檻，等於大半個數字同時被點亮，寫的過程整個看不見
-const SWEEP = 0.55;
+const FLASH = 0.16;      // 落地那一下的爆白衰減時間
+// 換分＝那一欄整片往下沖走，新的數字從正上方跟著落下來，像捲軸捲過去一格。
+// 新舊共用同一條位移曲線、間距固定一個字高，所以兩者是連在一起的一片水幕，
+// 不是各走各的兩段動畫 —— 差一點點就會看成「舊的先消失、新的再出現」。
+// ponytail: 舊版是逐格擦寫（只動真的變了的筆畫、由上往下掃一道雨頭），
+// 讀起來是筆畫在閃，不是一整個數字被沖掉。想省重繪成本可以回去翻 git
+const FALL = 0.9;    // 沖完一個字高要多久
+const GAP = 1.2;     // 新舊之間空幾格。水幕扯斷本來就會斷開一截，貼著反而像捲軸
+const RISE = GH + GAP;   // 新字從幾格高的地方落下來 = 一個字高再加上那道空隙
+const STRETCH = 0.6; // 落到最快的那一刻，整片縱向拉長幾成。水幕是會被拉長的
 
 // ── 固定種子的偽亂數 ────────────────────────────────────────────
 // 每根柱子的速度、長度、相位都走這支。用內建 Math.random 的話 CI 每次重拍縮圖
@@ -177,7 +177,7 @@ function ih(a, b, c){
 // 全部用裝置像素算。CELL 由「時間那一排要佔多寬」反推，所以不管視窗多大多小，
 // 數字永遠是畫面寬的七成四，欄數自然落在 60 上下
 let W=0, H=0, MW=0, MH=0, dpr=1, CELL=0, cols=0, rows=0, ox=0, oy=0, bx=0, by=0;
-let spd=null, len=null, cyc=null, off=null, hp=null;        // 每根柱子
+let spd=null, len=null, cyc=null, off=null;                 // 每根柱子
 let st=null, lt=null, chI=null;                             // 每一格：狀態、時刻、鎖住的字
 let gidx=null, want=null;                                   // 字模格 → 網格索引、目前該亮哪些
 let glow=null, HEADLESS=true;
@@ -241,7 +241,7 @@ function layout(){
   const t = clock();
   const rnd = mul32(20260731);
   spd = new Float64Array(cols); len = new Int32Array(cols);
-  cyc = new Float64Array(cols); off = new Float64Array(cols); hp = new Float64Array(cols);
+  cyc = new Float64Array(cols); off = new Float64Array(cols);
   for(let c=0;c<cols;c++){
     // 速度用「畫面高度的幾分之幾」算，不用固定的每秒幾格：直式版面的格子小很多，
     // 照格數給速度的話手機上會變成一場慢動作的雨
@@ -253,9 +253,6 @@ function layout(){
     // 空檔要留得夠大（至少半個畫面高），不然每一柱幾乎永遠都有雨，整面糊成一片綠
     cyc[c] = rows + len[c] + rows*(0.5 + rnd()*1.3);
     off[c] = rnd()*cyc[c];
-    // 上一幀的頭就從現在的位置起算。放 -1 的話第一幀會把整根柱子從第 0 列掃到頭，
-    // 等於進場那一瞬間整排數字被憑空點亮 —— 開場也該是雨寫出來的（或走 fallback）
-    hp[c] = (t*spd[c] + off[c]) % cyc[c];
   }
 
   const n = cols*rows;
@@ -269,13 +266,11 @@ function layout(){
   glow = mk(Math.max(1, Math.round(MW/3)), Math.max(1, Math.round(MH/3)));
   HEADLESS = !glow;
 
-  // 重排等於整面重下：現在該亮的每一格都退回「等雨」，虛擬雨頭會在 SWEEP 秒內掃完
+  // 重排等於整面重下：每一欄都重新從上面落一次，沒有舊字要沖走。
+  // st 剛才才 new 出來，整片是 0，不必再退一次
   cur = timeStr();
   want = mask(cur);
-  for(let j=0;j<want.length;j++){
-    const i = gidx[j];
-    if(want[j] && i >= 0){ st[i] = 1; lt[i] = t; }
-  }
+  for(let i=0;i<WID.length;i++){ fOld[i] = ''; fT[i] = t; }
   drawn = '';
 }
 
@@ -287,12 +282,12 @@ function clock(){ return (Date.now() - T0)/1000; }
 
 function timeStr(){
   const d = new Date(), p = n => String(n).padStart(2, '0');
-  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  return p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
 function mask(s){
   const m = new Uint8Array(GW*GH);
-  for(let i=0;i<8;i++){
+  for(let i=0;i<WID.length;i++){
     const g = GLYPH[s[i]], w = WID[i], x0 = POS[i];
     for(let r=0;r<GH;r++)
       for(let k=0;k<w;k++) if(g[r][k] === '#') m[r*GW + x0 + k] = 1;
@@ -301,13 +296,15 @@ function mask(s){
 }
 
 // ── 狀態 ────────────────────────────────────────────────────────
-// 一格四種狀態：0 還在下雨、1 是筆畫但還沒被寫到、2 已經鎖住、
-// 3 不再是筆畫、正在等雨頭把它帶走（將熄）。1→2 與 3→0 都只在雨頭掃過那一格時發生，
-// 所以寫上跟抹掉是同一個方向、同一道波前。
-// runs 這個名字是硬性的：tools/simulate.js 的探針直接讀 runs.length。
-// 這裡放「HH:MM 還沒寫出來的格子」，寫完就是 0，跟回報的值同一件事 ——
-// 將熄的格子不算未寫完，它已經不屬於現在這個數字了
+// 一格兩種狀態：0 還在下雨、2 已經鎖住（是筆畫，不再被雨蓋過）。中間那段
+// 「正在換」不放在格子上，而是整欄一起處理：落下中的那一欄，格子全部退回 0，
+// 舊字與新字改由 drawGlyph 當成兩片會動的東西畫上去。
+// fT[i] 是第 i 欄開始落下的時刻，-1 代表停著；fOld[i] 是要被沖走的舊字（'' 代表
+// 沒有舊的，開場與重排就走這條）。
+// runs 這個名字是硬性的：tools/simulate.js 的探針直接讀 runs.length，
+// 非空就代表畫面還沒定案 —— 現在裡面放的是還在落的欄，不是還沒寫完的格子
 let cur = '', drawn = '', runs = [];
+const fT = new Float64Array(WID.length).fill(-1), fOld = Array(WID.length).fill('');
 
 function pick(c, r, t){
   return ih(c, r, Math.floor(t*SWAP + ih(c, r, 7)/4294967296)) % CHARS.length;
@@ -317,24 +314,15 @@ function lock(c, r, i, t){
   st[i] = 2; lt[i] = t; chI[i] = pick(c, r, t);
 }
 
-// 虛擬雨頭掃到字模第 gr 列要多久（從那一格開始等的那一刻起算）。
-// 每根柱子加一個固定的相位差，不然整排八個字會像一條掃描線平平地壓下去；
-// 相位差是位置的雜湊不是亂數，同一個版面每次重跑都一樣
-function front(k, gr){ return SWEEP*(gr + ih(bx + k, 0, 91)/4294967296)/GH; }
-
-// 秒／分換的時候只動真的變了的格子：8 換成 9 共用的那幾畫留著不放，
-// 整位重寫的話秒數每秒閃一次，讀起來是壞掉的燈管不是雨
-function remask(s, t){
-  const nw = mask(s);
-  for(let j=0;j<nw.length;j++){
-    const i = gidx[j];
-    if(i < 0) continue;
-    // 不再是筆畫 → 不是一幀掉回雨裡，是先標成將熄，等雨頭掃過那一格才真的熄。
-    // 還沒被寫到的（st 1）畫面上本來就只有雨，沒有東西要被帶走，直接退場
-    if(want[j] && !nw[j]){ if(st[i] === 2){ st[i] = 3; lt[i] = t; } else st[i] = 0; }
-    else if(!want[j] && nw[j]){ st[i] = 1; lt[i] = t; }
+// 第 i 欄的格子：落地就鎖上（on），起飛就整欄退回雨裡（!on）。
+// 空白欄（冒號兩側留的那一欄）不在任何一欄的範圍裡，本來就永遠是雨
+function setField(i, on, t){
+  for(let gr=0;gr<GH;gr++) for(let k=POS[i];k<POS[i]+WID[i];k++){
+    const j = gr*GW + k, idx = gidx[j];
+    if(idx < 0) continue;
+    if(on && want[j]) lock(bx + k, by + gr, idx, t);
+    else st[idx] = 0;
   }
-  want = nw;
 }
 
 // 第 c 根柱子此刻的頭在第幾列（浮點，可能在畫面外）
@@ -342,39 +330,44 @@ function head(c, t){ return (t*spd[c] + off[c]) % cyc[c]; }
 
 function tick(t){
   const s = timeStr();
-  if(s !== cur){ remask(s, t); cur = s; }
-
-  // 頭掃過哪幾列。只看「現在在哪一格」會漏：直式版面一幀掉超過一格，
-  // 所以拿上一幀的位置算一段區間，整段都算掃過
-  for(let c=0;c<cols;c++){
-    const h = head(c, t);
-    const a = h < hp[c] ? -1 : hp[c];                 // 折返回頂端：從第 0 列重新算
-    const r1 = Math.min(rows-1, Math.floor(h));
-    for(let r=Math.max(0, Math.floor(a)+1); r<=r1; r++){
-      const i = r*cols + c;
-      if(st[i] === 1) lock(c, r, i, t);
-      else if(st[i] === 3) st[i] = 0;               // 舊筆畫被雨頭啃掉，掉回雨裡
+  if(s !== cur){
+    const prev = cur;
+    cur = s; want = mask(s);
+    for(let i=0;i<WID.length;i++) if(prev[i] !== s[i]){
+      fOld[i] = prev[i]; fT[i] = t; setField(i, false, t);
     }
-    hp[c] = h;
   }
 
   runs.length = 0;
-  for(let j=0;j<want.length;j++){
-    const i = gidx[j];
-    if(i < 0) continue;
-    const k = j%GW, gr = j/GW|0;
-    if(!want[j]){
-      // 將熄的格子一樣要有上限：慢的柱子好幾秒才回來一趟，舊筆畫不能賴在那裡不走
-      if(st[i] === 3 && t - lt[i] >= front(k, gr)) st[i] = 0;
-      continue;
-    }
-    if(st[i] === 2) continue;
-    if(t - lt[i] >= front(k, gr)){ lock(bx + k, by + gr, i, t); continue; }
-    if(k < HM_END) runs.push(j);
+  for(let i=0;i<WID.length;i++){
+    if(fT[i] < 0) continue;
+    if(t - fT[i] >= FALL){ fT[i] = -1; setField(i, true, t); }
+    else runs.push(i);
   }
 }
 
 // ── 畫 ──────────────────────────────────────────────────────────
+// 一整片會動的數字：第 fi 欄的字模 ch，第 0 列擺在第 top 格（絕對格座標，可為小數），
+// 往下每列間隔 s 格、每格也拉高成 s 格 —— 列距與格高用同一個 s，中間才不會裂開。
+// 字照落點的格子座標抽（pick 吃的是網格座標不是字模座標），所以落地那一刻
+// 接手的鎖住格子拿到的是同一個字，交班看不出接縫
+function drawGlyph(fi, ch, top, s, a, col, t){
+  const g = ctx, gl = GLYPH[ch], w = WID[fi], x0 = POS[fi];
+  // 底一律是 LEAF：綠底白字是鎖住那段的樣子，落下中的新字要長一樣才接得上。
+  // 拿 col 去鋪底的話，整片會變成一塊白灰色的板子飄下來
+  g.fillStyle = 'rgba(' + LEAF + ',' + (BED*a).toFixed(3) + ')';
+  for(let r=0;r<GH;r++) for(let k=0;k<w;k++) if(gl[r][k] === '#')
+    g.fillRect(ox + (bx + x0 + k)*CELL, oy + (top + r*s)*CELL, CELL + 0.8, CELL*s + 0.8);
+  for(let r=0;r<GH;r++) for(let k=0;k<w;k++) if(gl[r][k] === '#'){
+    const n = pick(bx + x0 + k, by + r, t);
+    g.setTransform(fsx[n], 0, 0, fsy[n]*s,
+                   ox + (bx + x0 + k + 0.5)*CELL, oy + (top + (r + 0.5)*s)*CELL);
+    g.fillStyle = 'rgba(' + col + ',' + a.toFixed(3) + ')';
+    g.fillText(CHARS[n], -fcx[n], -fcy[n]);
+  }
+  g.setTransform(1, 0, 0, 1, 0, 0);
+}
+
 function render(t){
   const g = ctx;
   g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
@@ -399,27 +392,23 @@ function render(t){
     }
   }
 
-  // 將熄的舊筆畫，同樣兩趟，畫在鎖住的下面。亮度一進這個狀態就掉一階，再隨著
-  // 雨頭逼近衰減到 0 —— 殘影要是跟新筆畫一樣白，5 換 6 的過場會疊成第三個數字，
-  // 讀出來是錯的。顏色也從 LIT（近白）換回 LEAF（雨的綠），退回雨裡的路上
-  for(let j=0;j<gidx.length;j++){
-    const i = gidx[j];
-    if(i < 0 || st[i] !== 3) continue;
-    const f = Math.max(0, 1 - (t - lt[i])/front(j%GW, j/GW|0));
-    g.fillStyle = 'rgba(' + LEAF + ',' + (BED*0.45*f).toFixed(3) + ')';
-    g.fillRect(ox + (bx + j%GW)*CELL, oy + (by + (j/GW|0))*CELL, CELL + 0.8, CELL + 0.8);
+  // 落下中的欄位，畫在鎖住的下面。同一條 e 餵給新舊兩片、間距固定 RISE，
+  // 所以動的是一整片水幕。舊的退回 LEAF（雨的綠）並淡出 —— 跟新字一樣白的話，
+  // 5 換 6 的過場會在視網膜上疊成第三個數字，讀出來是錯的
+  for(let i=0;i<WID.length;i++){
+    if(fT[i] < 0) continue;
+    const u = Math.min(1, (t - fT[i])/FALL);
+    // 位移用 smoothstep：兩端的速度都是 0。拉伸跟著速度走（4u(1-u) 是它正規化過的
+    // 導數），所以起跑與落地都是 s=1 —— 剛好接上前後那兩段沒有拉伸的鎖住狀態，
+    // 不然換手的那一幀會「啪」一下抽長。等速或 ease-out 的曲線在起跑點速度最大，
+    // 拉伸沒得歸零，就是為了這個才換掉
+    const e = u*u*(3 - 2*u), s = 1 + STRETCH*4*u*(1 - u);
+    // 錨在舊字的頂：兩片各自對自己的中心拉的話，中段會互相穿過去疊成一團。
+    // 空隙也乘同一個 s，整條（新字＋空隙＋舊字）才是一次均勻的拉伸
+    const seam = by + e*RISE;
+    if(fOld[i]) drawGlyph(i, fOld[i], seam, s, 1 - u, LEAF, t);
+    drawGlyph(i, cur[i], seam - RISE*s, s, 1, LIT, t);
   }
-  for(let j=0;j<gidx.length;j++){
-    const i = gidx[j];
-    if(i < 0 || st[i] !== 3) continue;
-    const f = Math.max(0, 1 - (t - lt[i])/front(j%GW, j/GW|0));
-    const n = chI[i];
-    const x = ox + (bx + j%GW + 0.5)*CELL, y = oy + (by + (j/GW|0) + 0.5)*CELL;
-    g.setTransform(fsx[n], 0, 0, fsy[n], x, y);
-    g.fillStyle = 'rgba(' + LEAF + ',' + (0.55*f).toFixed(3) + ')';
-    g.fillText(CHARS[n], -fcx[n], -fcy[n]);
-  }
-  g.setTransform(1, 0, 0, 1, 0, 0);
 
   // 鎖住的筆畫，兩趟。第一趟把整格鋪成綠底：一格厚的字外面留著縫的話，
   // 兩格厚的橫畫還是會斷成一排點。多鋪的 0.8 是讓相鄰兩格咬住，不留髮絲縫
