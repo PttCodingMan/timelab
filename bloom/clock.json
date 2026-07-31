@@ -1,0 +1,16 @@
+{
+  "id": "bloom",
+  "name": "潮汐花鐘",
+  "tagline": "潮水退去，天人菊開成現在幾點",
+  "name_en": "Tide Bloom Clock",
+  "tagline_en": "the tide pulls back and the blanketflowers open into the hour",
+  "created": "2026-07-30",
+  "tags": ["nature", "canvas", "pwa"],
+  "accent": "#e04a1f",
+  "shot": {
+    "width": 1200,
+    "height": 750,
+    "freeze": "2026-07-30T12:34:28+08:00",
+    "settle": 5200
+  }
+}

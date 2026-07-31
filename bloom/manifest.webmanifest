@@ -1,0 +1,41 @@
+{
+  "id": "bloom-clock",
+  "name": "Tide Bloom Clock",
+  "short_name": "Bloom",
+  "description": "A blanketflower field on white sand; the open blooms spell the hour, and the tide swaps only the ones that change.",
+  "lang": "en",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": [
+    "fullscreen",
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "background_color": "#cfe6f0",
+  "theme_color": "#7fb8dd",
+  "categories": [
+    "utilities"
+  ],
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
