@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>霧玻璃時鐘</title>
-<meta name="description" content="呵一口氣把玻璃糊掉，指尖沿筆順擦出現在幾點，霧再慢慢從邊緣爬回來把字吃掉。 Breathe on the glass to blur it, wipe the time out with a fingertip, then watch the fog creep back and eat it.">
+<meta name="description" content="指尖在結霧的玻璃上沿筆順擦出現在幾點，霧再慢慢爬回來把字吃掉。 Wipe the time onto fogged glass with a fingertip, then watch the fog creep back and eat it.">
 <meta name="theme-color" content="#0a0e14">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -125,7 +125,10 @@ const CARS = [[16.6, 1], [20.1, -1], [23.4, 1]];
 const CAR_HEAD = '196,228,255', CAR_TAIL = '255,110,86';
 
 // ── 一分鐘的節奏（秒）────────────────────────────────────────────
-const T_BREATH = 1.3;     // 呵氣：一團霧從下緣中央漲開蓋滿，舊字一起被埋
+const T_BREATH = 1.3;     // 換分的癒合窗：不整面呵氣，只把舊字軌跡用加速的爬回收掉。
+                          // 自然循環下舊字在 :50 前就被慢速爬回吃得差不多，半秒收乾淨；
+                          // 留滿 1.3 秒是給跳分／補寫這種「整排筆跡還新鮮」的情況 ——
+                          // 30Hz 連跑約 39 tick，磨痕封頂後最深的點 17 tick 內回到 SEAL
 const T_DIGIT  = 0.90;    // 一位數字擦完。從 0.62 拉長是因為手指要在轉角停下來 ——
                           // 等速走完的筆跡沒有節奏，慢下來的那幾拍才讀得出是手寫的
 const T_GAP    = 0.06;    // 字與字之間
@@ -403,6 +406,7 @@ function beat(sp){
 // 擦、呵氣、爬回全都只是對 mask 做加減，其餘程式碼一行都不用知道發生什麼事。
 let bgSharp = null, bgFog = null, mask = null, scr = null, HEADLESS = true;
 let body = null, flank = null, dot = null;   // 指腹的三枚 sprite，見 makePads()
+let maskPrev = null, mix = null;             // 爬回的上一步快照與顯示用的補間，見 rest()
 
 // 模擬環境只有 id='c' 那張 canvas 有 getContext，createElement 出來的沒有。
 // 任一張開不出來就設 HEADLESS，繪圖整條路徑跳過，狀態機照跑
@@ -418,7 +422,7 @@ function mk(w, h){
 // 整份程式都用裝置像素算：離屏跟主畫布同尺寸、drawImage 一比一貼，而且 ctx.filter
 // 的 blur 半徑本來就是裝置像素 —— 混用 CSS px 會讓爬回速度隨螢幕密度變
 let W=0, H=0, MW=0, MH=0, dpr=1, F=0, BR=0, STEP=0;
-let boxes=[], colon=null, BX=0, BY=0, BREATH_R=0;
+let boxes=[], colon=null;
 
 function layout(){
   W = cv.clientWidth || 1; H = cv.clientHeight || 1;
@@ -438,14 +442,11 @@ function layout(){
   colon = { x, y: y + F/2 };
   x += MID*F/2; put(); x += GAP*F; put();
 
-  // 呵氣的原點在畫面下緣中央；半徑撐到最遠的角落還在實心區內（漸層 0.5 之前全白）
-  BX = MW/2; BY = MH*1.02;
-  BREATH_R = Math.hypot(MW/2, BY)*2.1;
-
   polys = {};
   bgSharp = mk(MW, MH); bgFog = mk(MW, MH); mask = mk(MW, MH); scr = mk(MW, MH);
+  maskPrev = mk(MW, MH); mix = mk(MW, MH);
   makePads();
-  HEADLESS = !(bgSharp && bgFog && mask && scr && body && flank && dot);
+  HEADLESS = !(bgSharp && bgFog && mask && scr && maskPrev && mix && body && flank && dot);
   if(!HEADLESS){ paintBg(); paintFog(); seal(); }
   runs.length = 0; drawn = ''; dirty = true;   // 進場與 resize 之後走同一套，不特別處理
 }
@@ -514,21 +515,60 @@ function streetMoves(){
 }
 
 function paintFog(){
-  const f = bgFog.g;
+  const f = bgFog.g, s = scr.g;
   f.globalCompositeOperation = 'source-over';
   // 先鋪一層底：blur 會從畫布外採到透明，四個邊會露出底下這份。墊清楚的那張
   // 而不是一塊單色 —— 夜色已經是漸層，墊死色會在下緣壓出一圈暗邊
   f.drawImage(bgSharp.e, 0, 0);
-  f.filter = 'blur(' + (18*dpr) + 'px)';
+  f.filter = 'blur(' + (14*dpr) + 'px)';
+  f.drawImage(bgSharp.e, 0, 0);
+  // 結露不是失焦。失焦（單純 blur）把亮暗一起攤平，整片是均勻的近視灰；結露是散射，
+  // 亮處的光往外滲一大圈、暗處維持暗。用 lighter 疊一份糊很開的亮部，只有燈長得出暈。
+  // 散射補了柔，底下那份 blur 就從 18 收到 14，擦開與沒擦開的反差反而更清楚
+  f.filter = 'blur(' + (42*dpr) + 'px)';
+  f.globalCompositeOperation = 'lighter';
+  f.globalAlpha = 0.28;
   f.drawImage(bgSharp.e, 0, 0);
   f.filter = 'none';
-  const v = f.createLinearGradient(0, 0, 0, MH);
+  f.globalAlpha = 1;
+  f.globalCompositeOperation = 'source-over';
+
+  // 兩張定種子噪聲，白色只在 alpha 上亂：粗的（10×6 拉滿版）當霧的厚薄斑、
+  // 細的（480×300）當微水珠。只在 layout 烘一次 —— 結露的顆粒本來就不會動
+  const noise = (w, h, seed) => {
+    const n = mk(w, h); if(!n) return null;
+    const img = n.g.createImageData(w, h), d = img.data, rnd = mul32(seed);
+    for(let i=0;i<d.length;i+=4){ d[i]=d[i+1]=d[i+2]=255; d[i+3]=rnd()*255|0; }
+    n.g.putImageData(img, 0, 0);
+    return n;
+  };
+  const mottle = noise(10, 6, 20260731), grain = noise(480, 300, 20260732);
+
+  // 白紗先進 scr、用噪聲蝕出厚薄再貼回 —— 蝕的是紗不是整份霧，薄處透出的是
+  // 底下的散射暈（還是霧的樣子），不是清晰的夜景。粗噪聲拉 blur 抹掉放大的方格感。
+  // 蝕的力道試過 0.35：整片變暗、字的對比跟著掉；0.20 是「看得出厚薄、紗還是亮的」
+  s.globalCompositeOperation = 'source-over';
+  s.clearRect(0, 0, MW, MH);
+  const v = s.createLinearGradient(0, 0, 0, MH);
   v.addColorStop(0, VEIL_HI); v.addColorStop(0.45, VEIL_MD); v.addColorStop(1, VEIL_LO);
-  f.fillStyle = v; f.fillRect(0, 0, MW, MH);
+  s.fillStyle = v; s.fillRect(0, 0, MW, MH);
+  if(mottle && grain){
+    s.globalCompositeOperation = 'destination-out';
+    s.filter = 'blur(' + (26*dpr) + 'px)';
+    s.globalAlpha = 0.20;
+    s.drawImage(mottle.e, 0, 0, MW, MH);
+    s.filter = 'none';
+    s.globalAlpha = 0.05;
+    s.drawImage(grain.e, 0, 0, MW, MH);
+    s.globalAlpha = 1;
+    s.globalCompositeOperation = 'source-over';
+  }
+  f.drawImage(scr.e, 0, 0);
 }
 
 // ── 遮罩：白＝有霧、透明＝已擦乾淨 ────────────────────────────────
-// 用 copy 不是 source-over —— source-over 只能往上加，蓋不回上一分鐘爬滿的那面
+// 只在進場與 resize 時鋪滿。換分不再整面封死 —— 舊字軌跡交給 step() 的加速癒合收，
+// 其餘畫面因此完全不動。用 copy 是整張重設，不管前一面長什麼樣
 function seal(){
   const m = mask.g;
   m.globalCompositeOperation = 'copy';
@@ -650,16 +690,23 @@ function creep(){
   m.fillRect(0, 0, MW, MH);
   m.globalCompositeOperation = 'source-over';
   // blur 會從畫布外採到透明，連續跑一分鐘會把四個邊的霧啃掉一圈。每 tick 補回去。
-  // 補的這一圈要有 4 個 σ 寬，不然 blur 的尾巴照樣從圈內側把霧吸走
+  // 補的這一圈要有 4 個 σ 寬，不然 blur 的尾巴照樣從圈內側把霧吸走。
+  // 濃度釘在 SEAL 不是 1：上面的正規化把均勻區壓回 SEAL，圈釘全白會恆比內場濃 0.1，
+  // 靜止畫面會浮出一圈亮框。先挖空再以 SEAL 重畫，圈上每 tick 都恰好等於內場
   const e = Math.max(8*dpr, 4*CREEP*F);
-  m.strokeStyle = '#fff'; m.lineWidth = e;
+  m.lineWidth = e;
+  m.globalCompositeOperation = 'destination-out';
+  m.strokeStyle = '#fff';
+  m.strokeRect(e/2, e/2, MW-e, MH-e);
+  m.globalCompositeOperation = 'source-over';
+  m.strokeStyle = 'rgba(255,255,255,' + SEAL + ')';
   m.strokeRect(e/2, e/2, MW-e, MH-e);
 }
 
 // ── 狀態 ────────────────────────────────────────────────────────
 // runs 這個名字是硬性的：tools/simulate.js 的探針直接讀 runs.length。
 // 爬回不算 run（它從不結束），所以檢查點永遠是 0
-let drawn = '', runs = [], cut = [0,0,0,0], idle = 0, acc = 0, dirty = true;
+let drawn = '', runs = [], cut = [0,0,0,0], idle = 0, acc = 0, dirty = true, prevOK = 0;
 
 function commit(){ document.documentElement.dataset.shown = drawn; }
 
@@ -670,18 +717,9 @@ function timeStr(){
 
 function start(to){
   runs.length = 0;
-  runs.push({ to, t: 0, sealed: 0, dot: 0 });
+  runs.push({ to, t: 0, dot: 0 });
   cut = [0,0,0,0];
-}
-
-function breathe(t){
-  const k = Math.min(t/T_BREATH, 1), r = Math.max(1, BREATH_R*k*k);  // 先慢後快，像一口氣噴出來
-  const m = mask.g;
-  m.globalCompositeOperation = 'source-over';
-  const g = m.createRadialGradient(BX, BY, r*0.5, BX, BY, r);
-  g.addColorStop(0, 'rgba(255,255,255,.9)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  m.fillStyle = g; m.fillRect(0, 0, MW, MH);
+  prevOK = 0;
 }
 
 // 刷子沿弧長走一個固定格子，第 n 枚永遠蓋在 n*STEP 上，而且一枚只蓋一次。
@@ -701,8 +739,11 @@ function write(r){
             BR*prof(q[4])*(1 + 0.07*Math.sin(u/F*19))*(1 + FATT*k), q[2], q[3],
             // 停留＝反覆磨那一點，擦得更乾淨也略寬；走得快的地方滑過去、擦得淺。
             // 另外一個半刷寬之內算頭尾，補的份量收成平方 —— 線性的話離端點半個刷寬處
-            // 兩邊鄰居本來就疊滿了，再補就補過頭，反而在頭尾內側擦出一段特別深的
-            1 + GRIND*k + Math.pow(Math.max(0, 1 - q[5]/(BR*1.5)), 2),
+            // 兩邊鄰居本來就疊滿了，再補就補過頭，反而在頭尾內側擦出一段特別深的。
+            // 總力道封頂在 2：胖頭＋轉角停頓＋曲率減速三個加成疊在同一點（2 的起筆鉤）
+            // 會磨出爬回追不上的深痕 —— α 掉到 0.003 之後，每 tick 乘 1.22 的增益
+            // 一分鐘內補不回 SEAL，殘影一路撐過 :57。封頂讓它跟普通胖頭一樣深
+            Math.min(2, 1 + GRIND*k + Math.pow(Math.max(0, 1 - q[5]/(BR*1.5)), 2)),
             null, Math.sin(u/F*2.3)*SKEW);   // 擺一個週期約一個字的路徑長
       n++;
     }
@@ -717,11 +758,12 @@ function write(r){
 function step(r, dt){
   r.t += dt;
   if(!HEADLESS){
-    if(r.t < T_BREATH) breathe(r.t);
-    else{
-      if(!r.sealed){ r.sealed = 1; seal(); }    // 呵完氣把整面封死，角落才不會漏出上一分鐘的字
-      write(r);
-    }
+    // 換分不呵氣：舊字軌跡用加速的 creep 癒合。霧場的均勻區是 SEAL 定點，跑幾次都
+    // 不動，所以這一段「只會」動到軌跡 —— 其餘畫面一個像素都不變。收乾淨了才下筆。
+    // 手擦的塗鴉平常由慢速爬回自然吃，換分這一下會被一起收走 —— 想豁免就得把癒合
+    // clip 在數字帶內，但塗鴉穿過帶界會被切出直線接縫，不值得
+    if(r.t < T_BREATH){ r.ca = (r.ca || 0) + dt; while(r.ca >= 1/30){ r.ca -= 1/30; creep(); } }
+    else write(r);
   }
   dirty = true;
   // 數字真的擦出來的那一刻才回報，不提早寫
@@ -732,7 +774,18 @@ function rest(dt){
   idle += dt;
   if(idle < T_HOLD) return;                     // 停住：不爬，讓人把時間看完
   acc += dt;
-  while(acc >= TICK){ acc -= TICK; if(!HEADLESS) creep(); dirty = true; }
+  while(acc >= TICK){ acc -= TICK;
+    if(!HEADLESS){
+      // 走這一步之前先把現況拍下來：顯示端要在「上一步→這一步」之間補間。
+      // 顯示因此落後模擬一個 tick，霧的總長多 2.5 秒 —— 沒人量得出來
+      maskPrev.g.globalCompositeOperation = 'copy';
+      maskPrev.g.drawImage(mask.e, 0, 0);
+      prevOK = 1; creep();
+    }
+  }
+  // mask 是 8-bit，tick 的步距不能再切小（每步低於 1/255 會被進位歸零、霧直接停住），
+  // 要無縫只能在顯示端把兩步 crossfade 起來 —— 代價是霧化期間每幀重繪，見 render()
+  if(prevOK) dirty = true;
 }
 
 // 每幀三次 drawImage，沒有 per-pixel JS
@@ -746,8 +799,18 @@ function render(){
   s.clearRect(0, 0, MW, MH);
   s.drawImage(bgFog.e, 0, 0);
   street(s, 2.2, 0.75);  // 白紗已經烘進 bgFog 了，這一份疊在上面，所以 alpha 要自己壓低
+  // 爬回的兩步之間做線性補間：copy 先放 (1-k) 的上一步，lighter 把 k 的這一步加上去。
+  // 兩係數和為 1，α 是凸組合不會爆 1；每幀只動一小截，2.5 秒一階的樓梯就消失了
+  let msk = mask;
+  if(prevOK){
+    const k = Math.min(1, acc/TICK), g = mix.g;
+    g.globalCompositeOperation = 'copy';    g.globalAlpha = 1 - k; g.drawImage(maskPrev.e, 0, 0);
+    g.globalCompositeOperation = 'lighter'; g.globalAlpha = k;     g.drawImage(mask.e, 0, 0);
+    g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+    msk = mix;
+  }
   s.globalCompositeOperation = 'destination-in';
-  s.drawImage(mask.e, 0, 0);
+  s.drawImage(msk.e, 0, 0);
   s.globalCompositeOperation = 'source-over';
   ctx.drawImage(scr.e, 0, 0);
 }
@@ -762,7 +825,7 @@ function frame(now){
   else if(r) step(r, dt);
   else rest(dt);
   if(!HEADLESS && streetMoves()) dirty = true;
-  // 一分鐘裡有五十幾秒畫面是靜止的（或一秒才動一次），沒變就別重貼三張全螢幕
+  // 寫字與停住的段落畫面靜止就不重貼；霧化段為了補間每幀都在動（見 rest）
   if(dirty){ render(); dirty = false; }
   requestAnimationFrame(frame);
 }
@@ -776,6 +839,9 @@ function drag(x, y){
   const dx = mv ? (x-px)/L : 1, dy = mv ? (y-py)/L : 0;
   // 真人的手速不套那條速度曲線 —— 那是拿來演「寫字」的，這裡的快慢是使用者自己的
   for(let i=1;i<=n;i++) stamp(px + (x-px)*i/n, py + (y-py)*i/n, BR*0.95, dx, dy, mv ? 1 : 3);
+  // 手擦的痕要立刻全亮，不能等下一 tick 才從補間裡浮出來：基準快照直接同步。
+  // 其他筆跡的補間會往前跳最多一個 tick 的量 —— 使用者正盯著自己的手指，看不到
+  if(prevOK){ maskPrev.g.globalCompositeOperation = 'copy'; maskPrev.g.drawImage(mask.e, 0, 0); }
   px = x; py = y; dirty = true;
 }
 addEventListener('pointerdown', e => { down = true; px = e.clientX*dpr; py = e.clientY*dpr; drag(px, py); });
