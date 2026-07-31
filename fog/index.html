@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>霧玻璃時鐘</title>
-<meta name="description" content="呵一口氣把玻璃糊掉，指尖沿筆順擦出現在幾點，霧再慢慢從邊緣爬回來把字吃掉。 Breathe on the glass to blur it, wipe the time out with a fingertip, then watch the fog creep back and eat it.">
+<meta name="description" content="指尖在結霧的玻璃上沿筆順擦出現在幾點，霧再慢慢爬回來把字吃掉。 Wipe the time onto fogged glass with a fingertip, then watch the fog creep back and eat it.">
 <meta name="theme-color" content="#0a0e14">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -125,7 +125,10 @@ const CARS = [[16.6, 1], [20.1, -1], [23.4, 1]];
 const CAR_HEAD = '196,228,255', CAR_TAIL = '255,110,86';
 
 // ── 一分鐘的節奏（秒）────────────────────────────────────────────
-const T_BREATH = 1.3;     // 呵氣：一團霧從下緣中央漲開蓋滿，舊字一起被埋
+const T_BREATH = 1.3;     // 換分的癒合窗：不整面呵氣，只把舊字軌跡用加速的爬回收掉。
+                          // 自然循環下舊字在 :50 前就被慢速爬回吃得差不多，半秒收乾淨；
+                          // 留滿 1.3 秒是給跳分／補寫這種「整排筆跡還新鮮」的情況 ——
+                          // 30Hz 連跑約 39 tick，磨痕封頂後最深的點 17 tick 內回到 SEAL
 const T_DIGIT  = 0.90;    // 一位數字擦完。從 0.62 拉長是因為手指要在轉角停下來 ——
                           // 等速走完的筆跡沒有節奏，慢下來的那幾拍才讀得出是手寫的
 const T_GAP    = 0.06;    // 字與字之間
@@ -418,7 +421,7 @@ function mk(w, h){
 // 整份程式都用裝置像素算：離屏跟主畫布同尺寸、drawImage 一比一貼，而且 ctx.filter
 // 的 blur 半徑本來就是裝置像素 —— 混用 CSS px 會讓爬回速度隨螢幕密度變
 let W=0, H=0, MW=0, MH=0, dpr=1, F=0, BR=0, STEP=0;
-let boxes=[], colon=null, BX=0, BY=0, BREATH_R=0;
+let boxes=[], colon=null;
 
 function layout(){
   W = cv.clientWidth || 1; H = cv.clientHeight || 1;
@@ -437,10 +440,6 @@ function layout(){
   put(); x += GAP*F; put(); x += MID*F/2;
   colon = { x, y: y + F/2 };
   x += MID*F/2; put(); x += GAP*F; put();
-
-  // 呵氣的原點在畫面下緣中央；半徑撐到最遠的角落還在實心區內（漸層 0.5 之前全白）
-  BX = MW/2; BY = MH*1.02;
-  BREATH_R = Math.hypot(MW/2, BY)*2.1;
 
   polys = {};
   bgSharp = mk(MW, MH); bgFog = mk(MW, MH); mask = mk(MW, MH); scr = mk(MW, MH);
@@ -566,7 +565,8 @@ function paintFog(){
 }
 
 // ── 遮罩：白＝有霧、透明＝已擦乾淨 ────────────────────────────────
-// 用 copy 不是 source-over —— source-over 只能往上加，蓋不回上一分鐘爬滿的那面
+// 只在進場與 resize 時鋪滿。換分不再整面封死 —— 舊字軌跡交給 step() 的加速癒合收，
+// 其餘畫面因此完全不動。用 copy 是整張重設，不管前一面長什麼樣
 function seal(){
   const m = mask.g;
   m.globalCompositeOperation = 'copy';
@@ -715,18 +715,8 @@ function timeStr(){
 
 function start(to){
   runs.length = 0;
-  runs.push({ to, t: 0, sealed: 0, dot: 0 });
+  runs.push({ to, t: 0, dot: 0 });
   cut = [0,0,0,0];
-}
-
-function breathe(t){
-  const k = Math.min(t/T_BREATH, 1), r = Math.max(1, BREATH_R*k*k);  // 先慢後快，像一口氣噴出來
-  const m = mask.g;
-  m.globalCompositeOperation = 'source-over';
-  const g = m.createRadialGradient(BX, BY, r*0.5, BX, BY, r);
-  g.addColorStop(0, 'rgba(255,255,255,.9)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  m.fillStyle = g; m.fillRect(0, 0, MW, MH);
 }
 
 // 刷子沿弧長走一個固定格子，第 n 枚永遠蓋在 n*STEP 上，而且一枚只蓋一次。
@@ -765,11 +755,12 @@ function write(r){
 function step(r, dt){
   r.t += dt;
   if(!HEADLESS){
-    if(r.t < T_BREATH) breathe(r.t);
-    else{
-      if(!r.sealed){ r.sealed = 1; seal(); }    // 呵完氣把整面封死，角落才不會漏出上一分鐘的字
-      write(r);
-    }
+    // 換分不呵氣：舊字軌跡用加速的 creep 癒合。霧場的均勻區是 SEAL 定點，跑幾次都
+    // 不動，所以這一段「只會」動到軌跡 —— 其餘畫面一個像素都不變。收乾淨了才下筆。
+    // 手擦的塗鴉平常由慢速爬回自然吃，換分這一下會被一起收走 —— 想豁免就得把癒合
+    // clip 在數字帶內，但塗鴉穿過帶界會被切出直線接縫，不值得
+    if(r.t < T_BREATH){ r.ca = (r.ca || 0) + dt; while(r.ca >= 1/30){ r.ca -= 1/30; creep(); } }
+    else write(r);
   }
   dirty = true;
   // 數字真的擦出來的那一刻才回報，不提早寫
