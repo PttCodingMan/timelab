@@ -650,9 +650,16 @@ function creep(){
   m.fillRect(0, 0, MW, MH);
   m.globalCompositeOperation = 'source-over';
   // blur 會從畫布外採到透明，連續跑一分鐘會把四個邊的霧啃掉一圈。每 tick 補回去。
-  // 補的這一圈要有 4 個 σ 寬，不然 blur 的尾巴照樣從圈內側把霧吸走
+  // 補的這一圈要有 4 個 σ 寬，不然 blur 的尾巴照樣從圈內側把霧吸走。
+  // 濃度釘在 SEAL 不是 1：上面的正規化把均勻區壓回 SEAL，圈釘全白會恆比內場濃 0.1，
+  // 靜止畫面會浮出一圈亮框。先挖空再以 SEAL 重畫，圈上每 tick 都恰好等於內場
   const e = Math.max(8*dpr, 4*CREEP*F);
-  m.strokeStyle = '#fff'; m.lineWidth = e;
+  m.lineWidth = e;
+  m.globalCompositeOperation = 'destination-out';
+  m.strokeStyle = '#fff';
+  m.strokeRect(e/2, e/2, MW-e, MH-e);
+  m.globalCompositeOperation = 'source-over';
+  m.strokeStyle = 'rgba(255,255,255,' + SEAL + ')';
   m.strokeRect(e/2, e/2, MW-e, MH-e);
 }
 
