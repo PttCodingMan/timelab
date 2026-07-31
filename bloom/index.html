@@ -102,19 +102,188 @@ const clamp = x => x < 0 ? 0 : x > 1 ? 1 : x;
 const smooth = x => { const t = clamp(x); return t * t * (3 - 2 * t); };
 const TAU = Math.PI * 2;
 
-// ── 色票 ────────────────────────────────────────────────────────
-const SKY_HI = '#7fb8dd', SKY_LO = '#cfe6f0';      // 頂 → 海平線（大氣散射泛白）
-const SEA_FAR = '#3f8fb0', SEA_NEAR = '#1d6e93';
-const SAND_HI = '#f2e6cf', SAND_LO = '#e8d7b8';
-const SAND_WET = '#c9ac86';
-const STEM = '#6e8a5e', LEAF = '#5c7a4a';
+// ── 一天的光 ────────────────────────────────────────────────────
+// 這座鐘有兩個報時管道：四位數字，還有光。天、海、沙、陰影、花的受光全部跟著
+// 它「顯示出來的那個時刻」的太陽走 —— 還沒讀出數字，先從天色知道大概幾點。
+//
+// 硬性條件：調色盤的輸入是顯示的時與分（h*60+m），每分鐘一階、階內完全常數。
+// tools/shoot.py 的 freeze 只平移 Date 的原點、時間照樣流動，顏色要是跟著幀
+// 連續變化，兩次截圖就會差幾個 LSB，cmp 直接不過。一天 1440 階，一分鐘走
+// 1/1440 個循環，肉眼看不出跳格；這一階跟 dataset.shown 同一個節拍。
+//
+// 插值走線性 sRGB。在 gamma 空間直接 lerp 的話，夜的藍紫走到黃昏的暖杏，
+// 中間那一大段會塌成發灰的濁色 —— 兩端好看、中間難看，而中間佔掉一天大半。
+const s2l = c => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+const l2s = v => { const c = v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+                   return Math.max(0, Math.min(255, Math.round(c * 255))); };
+const LIN = []; for(let i = 0; i < 256; i++) LIN.push(s2l(i));
+const h2l = h => [LIN[parseInt(h.slice(1, 3), 16)], LIN[parseInt(h.slice(3, 5), 16)], LIN[parseInt(h.slice(5, 7), 16)]];
+const mixc = (a, b, t) => [l2s(a[0] + (b[0] - a[0]) * t), l2s(a[1] + (b[1] - a[1]) * t), l2s(a[2] + (b[2] - a[2]) * t)];
+// 這一支是 gamma 空間直接混：canvas 的 alpha 合成就是這樣算的，
+// 底下的訊號夾制要預測「畫出來會是多亮」，就得跟 canvas 用同一種算術
+const mixn = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const luma = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+const rgb = c => 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+const rgba = (c, a) => 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')';
+
+// 六個關鍵時刻的完整色票，之間插值。欄位：
+//   sky   天 [頂, 海平線]              sea  海 [遠, 近]
+//   sand  沙 [亮, 暗, 濕]              grain 沙粒 [亮顆粒, 暗顆粒]
+//   cover 地被草 [兩色]                green 莖葉 [莖, 葉, 未開的莖, 未開的葉]
+//   shade 陰影色 / shL 長度倍率 / shD 方向（-1 往西、0 正下方、+1 往東）/ shA 濃度
+//   foam  泡沫、碎浪、白浪紋           wet  濕沙反射三段
+//   water 潮水漸層四段
+//   wash  過曝平洗 + washA / glow 光暈 + glowA + glowR / sunX,sunY 太陽在畫面上的位置
+//         （sunY 以 SKYH 為單位：1 = 貼海平線，負的 = 已經升出畫面上緣）
+//   lit   花的受光：整張花頭 atlas 往這個顏色 lerp litA
+//   page  頁面 CSS --sand（canvas 外面那圈底色）
+//
+// 天人菊入夜其實會把舌狀花瓣收起來 —— 但花一閉上就沒有鐘可看了，所以這座鐘
+// 選擇讓它整夜開著，改用月光下的冷色調交代「現在是深夜」。這是刻意的取捨。
+const TOD = [
+  { at: 300,   // 拂曉 05:00　日輪剛頂到海平線，天頂還是靛藍，光弱、影子長而散
+    sky:['#3b4470','#d59a7e'], sea:['#a8807a','#2e3a56'],
+    sand:['#8e7a72','#7a675f','#5c4c4a'], grain:['#c4b2a8','#564a48'],
+    cover:['#54584a','#6c6a58'], green:['#4e5a48','#414f3c','#6e6f60','#666a58'],
+    shade:'#3a3a5c', shL:1.85, shD:-1, shA:0.70,
+    foam:'#ffe2d2', wet:['#dea692','#b49696','#968a92'],
+    water:['#f0d6c4','#c8a49a','#82788c','#4c546e'],
+    wash:'#ffb48c', washA:0.035, glow:'#ffba8c', glowA:0.24, glowR:0.85, sunX:0.86, sunY:1.00,
+    lit:'#4e3c50', litA:0.34, page:'#8a7268' },
+  { at: 480,   // 晨光 08:00　太陽爬到東邊三成高，光還是暖的，影子朝西拉長
+    sky:['#6fa8d8','#e8dcc6'], sea:['#5e9db4','#23648a'],
+    sand:['#c2a279','#ab8f68','#8f7551'], grain:['#e6d4b2','#6e5c46'],
+    cover:['#707e50','#8a9264'], green:['#6a8a58','#587846','#96a37e','#8a9a6c'],
+    shade:'#565c76', shL:1.42, shD:-1, shA:0.92,
+    foam:'#fffaf0', wet:['#d6e8ee','#c4dce6','#bed6e2'],
+    water:['#f4fafa','#b0d6dc','#76acbe','#588ca4'],
+    wash:'#fff4e1', washA:0.045, glow:'#ffeec8', glowA:0.20, glowR:0.85, sunX:0.80, sunY:0.35,
+    lit:'#ffe1b4', litA:0.06, page:'#bc9e78' },
+  { at: 750,   // 正午 12:30　太陽在畫面上緣外，影子縮成腳邊一枚圓點、沒有方向
+    sky:['#7fb8dd','#cfe6f0'], sea:['#3f8fb0','#1d6e93'],
+    sand:['#c9ab7d','#b2976c','#967c55'], grain:['#e8d8b8','#705e48'],
+    cover:['#748054','#8c9468'], green:['#6e8a5e','#5c7a4a','#9aa583','#8e9d71'],
+    shade:'#686a76', shL:1.02, shD:0, shA:1.00,
+    foam:'#ffffff', wet:['#cfe6f0','#bedae8','#bedae8'],
+    water:['#eefafc','#aad6de','#70aabe','#548aa4'],
+    wash:'#fff8eb', washA:0.05, glow:'#fffcf0', glowA:0.20, glowR:0.70, sunX:0.50, sunY:-1.20,
+    lit:'#ffffff', litA:0, page:'#c4a678' },
+  { at: 960,   // 午後 16:00　太陽過中天往西掉，光開始轉暖，影子倒向東邊
+    sky:['#7db2d6','#e2d6c0'], sea:['#5590a6','#245f80'],
+    sand:['#c8a677','#b09164','#927a52'], grain:['#ead6b2','#725e46'],
+    cover:['#767e50','#909464'], green:['#6e8858','#5c7648','#9aa17e','#8e986c'],
+    shade:'#5e6076', shL:1.30, shD:1, shA:0.98,
+    foam:'#fff8ec', wet:['#d8e6ea','#c8d8de','#c4d2d6'],
+    water:['#f6f8f6','#b8d6d8','#7eacba','#5c8ca0'],
+    wash:'#fff0d7', washA:0.05, glow:'#ffecbe', glowA:0.22, glowR:0.85, sunX:0.28, sunY:0.30,
+    lit:'#ffd6a0', litA:0.05, page:'#c2a274' },
+  { at: 1140,  // 黃昏 19:00　太陽壓在左邊的海平面上，天頂留著夜的藍紫，影子最長
+    sky:['#5a6386','#d9a98c'], sea:['#bd9c8c','#3a4c66'],
+    sand:['#bf9c8b','#a4867d','#876c68'], grain:['#e4ccbe','#6c5858'],
+    cover:['#707254','#908664'], green:['#6b7350','#5b6647','#948d76','#8a8670'],
+    shade:'#4e4a70', shL:1.40, shD:1, shA:0.88,
+    foam:'#fff0e2', wet:['#ecba94','#ceaa98','#baa29c'],
+    water:['#fcead8','#d8b6a8','#968a94','#5e667e'],
+    wash:'#ffce96', washA:0.045, glow:'#ffd092', glowA:0.26, glowR:0.85, sunX:0.16, sunY:1.00,
+    lit:'#ffb46e', litA:0.12, page:'#b5978a' },
+  { at: 1380,  // 夜 23:00　只剩月光。沒有方向性的光就沒有方向性的影子，只剩腳邊一圈淡暗
+    sky:['#141e36','#2c3c56'], sea:['#26384e','#121e32'],
+    sand:['#3a3e4e','#2e3240','#242836'], grain:['#78808f','#282c38'],
+    cover:['#323c4a','#404c58'], green:['#39444a','#313c40','#3f464e','#3a4148'],
+    shade:'#1a2034', shL:1.06, shD:0, shA:0.62,
+    foam:'#c2d0e4', wet:['#96acc8','#7e92b0','#6e809e'],
+    water:['#c4d6ec','#8ca4c4','#50688c','#2c4060'],
+    wash:'#96b4e6', washA:0.03, glow:'#c4d6f6', glowA:0.15, glowR:0.55, sunX:0.62, sunY:0.20,
+    lit:'#4a5478', litA:0.34, page:'#2e3240' }
+];
+
+let PAL = null, PAL_MIN = -1;
+
+// ── 訊號夾制 ────────────────────────────────────────────────────
+// 這座鐘唯一的訊號通道是「開花 vs 沒開花」，而縮圖上那個對比其實只剩明度差。
+// 六張色票之間插值的時候，這個差會變號：黃昏花比沙暗、夜裡花比沙亮（那個反轉
+// 是夜的靈魂，不能拿掉）。兩個號之間的插值必然經過零 —— 過零的那一分鐘兩群
+// 亮度重疊，四位數字整個溶進沙裡。實測 22:03 兩群只差 3、02:03 甚至反壓 21。
+// 把 keyframe 加密沒有用：過零點只會變窄，不會消失。
+//
+// 所以改成「算完色票再夾一次」：估出這一分鐘開花與沙的明度，差不夠就把花的
+// 曝光推開到門檻以上。推的是花不是沙 —— 天、海、沙、影子全部維持色票原本的
+// 光，只有「花接到多少光」被改寫，那本來就是 lit/litA 這個欄位的意思。
+//
+// 反轉必須發生在某一分鐘（連續的路徑做不到跳號），所以把它釘在整點：
+// 那一分鐘是大潮，整片田被水蓋掉再重新開一次，換相位的那一下沒有花可以看。
+const FLOW_L = 82;          // 一朵全開的花在縮圖上的平均明度（未受光）。量 atlas 得來
+const GROUND_C = 0.10;      // 乾沙被地被草壓掉的比例
+const GROUND_K = 0.92;      // 再整體暗一階：那一格裡還有花苞、莖與腳邊的落地陰影
+const GROUND_B = 1.4;
+const GLARE_F = 0.26;       // 光暈打在數字帶那一段的等效比例
+// 門檻不是定值。真正要守住的是「兩群不重疊」，而兩群自己的胖瘦跟光暈強度成正比：
+// 數字帶靠太陽那一端比另一端亮，glowA 越大落差越大（實測兩群的半幅和 ≈ 93·glowA − 8）。
+// 所以門檻 = 要求的間距 30 ＋ 半幅 ＋ 代理式的誤差餘裕，再補回「花苞也吃這道曝光、
+// 兩群會一起位移」而少掉的那一成 → 收成一條直線
+const SIG_A = 29, SIG_B = 100;   // 兩群平均明度的最小差 = SIG_A + SIG_B·glowA
+// 直式的斜率要放大。半幅那一項來自「數字帶靠太陽那一端比另一端亮」，落差多大取決於
+// 字帶橫跨多少深度：橫式的字只佔 v=3..9，直式是 v=2..15（HH 一排 MM 一排），
+// 同一道光暈的落差被拉長一倍。實測 04:01 兩群的半幅和從 32.8（橫式）變成 41.3（直式），
+// 正好 1.27 倍 —— 半幅乘 1.27 回推到門檻的斜率就是 100 → 145。
+// 只換係數，夾制的式子與方向一個字沒動；橫式吃到的還是原本那條 29 + 100·glowA
+const SIG_B_PORT = 145;
+const NIGHT_A = 22 * 60, NIGHT_B = 1 * 60;   // 花比沙亮的那一段（22:00 起、01:00 止）
+
+function todAt(md){
+  const n = TOD.length;
+  let i = n - 1;                                  // md 比第一個關鍵時刻還早 → 落在「夜→拂曉」那一段
+  for(let k = 0; k < n; k++) if(md >= TOD[k].at) i = k;
+  const a = TOD[i], b = TOD[(i + 1) % n];
+  let span = b.at - a.at, t = md - a.at;
+  if(span <= 0) span += 1440;
+  if(t < 0) t += 1440;
+  const k = smooth(t / span);                     // 關鍵時刻附近走得慢一點，過渡才不會有轉折感
+  const out = {};
+  for(const key in a){
+    const va = a[key], vb = b[key];
+    if(typeof va === 'number') out[key] = va + (vb - va) * k;
+    else if(typeof va === 'string') out[key] = mixc(h2l(va), h2l(vb), k);
+    else out[key] = va.map((s, j) => mixc(h2l(s), h2l(vb[j]), k));
+  }
+  // 訊號夾制。glr 是「平洗 ＋ 光暈」把整片畫面一起壓向光色之後，兩群的差還剩幾成
+  const glr = (1 - out.washA) * (1 - GLARE_F * out.glowA);
+  const Lf = FLOW_L + (luma(out.lit) - FLOW_L) * out.litA;
+  const Lg = GROUND_K * luma(mixn(out.sand[0], out.cover[0], GROUND_C)) + GROUND_B;
+  const sgn = (md >= NIGHT_A || md < NIGHT_B) ? 1 : -1;
+  const Lt = Lg + sgn * (SIG_A + (PORT ? SIG_B_PORT : SIG_B) * out.glowA) / glr;   // 花該有的明度
+  // 曝光：正的往光源色提亮（花被月光／夕照打到），負的直接壓暗（少接一點光）
+  out.exp = sgn > 0
+    ? Math.max(0, Math.min(0.9, (Lt - Lf) / Math.max(1, luma(out.glow) - Lf)))
+    : -Math.max(0, Math.min(0.9, 1 - Lt / Math.max(1, Lf)));
+
+  // 被吹走的花瓣不在 atlas 裡，自己補一次同樣的受光與曝光
+  const shine = out.exp > 0 ? out.glow : [0, 0, 0], sa = Math.abs(out.exp);
+  out.pet = [[224, 99, 31], [240, 185, 63]].map(c => {
+    const lc = out.litA < 0.002 ? c : mixn(c, out.lit, out.litA);
+    return (sa < 0.002 ? lc : mixn(lc, shine, sa)).map(Math.round);
+  });
+  return out;
+}
+
+const todMin = s => +s.slice(0, 2) * 60 + +s.slice(2);
+
+// 換一分鐘才換一次色票。回傳「這次真的換了嗎」，沒換的話呼叫端連一次重畫都不做。
+// --text 與 --line 不跟著跑：控制列是一枚半透明的亮色貼片，深色字在任何一個
+// 時段的沙上都讀得到，跟著色票走反而會在某幾個小時變成亮字疊亮底
+function setTOD(md){
+  if(md === PAL_MIN) return false;
+  PAL_MIN = md;
+  PAL = todAt(md);
+  document.documentElement.style.setProperty('--sand', rgb(PAL.page));
+  document.querySelector?.('meta[name=theme-color]')?.setAttribute('content', rgb(PAL.sky[0]));
+  return true;
+}
+
+const BUD_A = 0.74;         // 未開花苞的不透明度
 // 沒開的那一株整株往沙色靠、降飽和。開／未開的對比是這座鐘唯一的訊號通道，
 // 背景那片要是跟數字同一個綠、同一個大小，四位數字就淹在紋理裡
 // 但退太多整片沙就空了：這裡只降飽和、不降到沙色，靠落地陰影去拉開「開／未開」
-const STEM_DIM = '#9aa583', LEAF_DIM = '#8e9d71';
-const BUD_A = 0.74;         // 未開花苞的不透明度
-// 落地陰影：正午光壓在正下方、短、偏冷灰（影子裡填的是天空光）
-const SHADE = [104, 106, 118];
 
 // ── 五官都寫死的數字：5×7 點陣 ────────────────────────────────────
 // 不抄 zen 的貝茲筆順 —— 點陣不需要筆順，這是這座鐘比 fog／zen 省下來的地方。
@@ -136,12 +305,22 @@ const G = [
 const PETALS = 13;          // 費氏數，看起來自然
 const BACKC = 1.40;         // easeOutBack 的過衝係數，峰值約 1.08
 const backEase = x => { const p = x - 1; return 1 + (BACKC + 1) * p * p * p + BACKC * p * p; };
-const TILE = 128, STAGES = 24, VARS = 4;   // sprite atlas：4 種變體 × 24 格開合，3072×512
+// sprite atlas：4 種變體 × 24 格開合。TILE 是一朵花的取樣解析度，必須大於畫面上
+// 最大那朵的直徑，否則放大的花是把 128px 拉開來糊掉的，瓣尖也會被裁到。OPEN 拉到
+// 1.25 之後最近一排的開花直徑約 120px，128 只剩 6% 餘裕 —— 192 回到當初
+// 128 對 88px 那個 1.45 倍的取樣餘裕，OPEN 一路開到 1.4（134px）也還夠
+const TILE = 192, STAGES = 24, VARS = 4;   // 4608×768
 // 背景花苞：不是每一格都站一株，也不跟數字一樣大。整片都站滿、尺寸又跟開花差不多的話，
 // 花田會變成一張均勻的紋理，把「開／未開」的對比整個稀釋掉 —— 縮圖上就讀不出數字
 const GRASS_P = 0.56;       // 非數字格的花苞覆蓋率（seeded）
 const GRASS_SZ = 0.76;      // 背景花苞相對數字花的整株大小
-const GAP = 0.92;           // 開花花徑最多吃掉格距的幾成（見 layout()）
+const GAP = 0.92;           // 花苞／莖／葉的格距預算：HEAD 由它反推（見 layout()）
+// 開花之後花徑吃掉格距的幾成。> GAP 就是「相鄰兩朵一定重疊」—— 這是要的：
+// 使用者要的是花擠成一片的花田，不是一盤排好的點。分辨相鄰兩朵靠的不再是花瓣之間
+// 那道縫，而是各自腳邊那枚落地陰影（它跟著 f.r 走，放大時不會相對縮水）。
+// 真正的上限在字腔：0 的洞、4 的三角、6/8/9 的圈被填掉，四位數就讀不出來了
+const OPEN = 1.25;
+const OPEN_K = OPEN / GAP;  // 開花相對花苞的額外放大。花苞與地被留在 GAP 那一檔不動
 const GZ_MAX = 1.02;        // 數字帶那些花的尺寸抽籤上界
 
 // ── 風：陣風制 ──────────────────────────────────────────────────
@@ -408,24 +587,26 @@ function gaillardia(g, R, b, sd){
 // ── 離屏：花頭 sprite atlas ＋ 沙的顆粒 texture ────────────────────
 // 330 朵 × 13 片 = 4000+ path/frame 一定掉幀，所以花頭預渲染成 atlas，
 // 畫的時候只有 drawImage ＋ transform；風的傾斜靠 transform，不重畫 path
-let atlas = null, sand = null, sandPat = null, bg = null, shade = null;
+let atlas = null, atlasL = null, sand = null, sandPat = null, bg = null, shade = null;
 
 // 落地陰影的貼圖：一枚徑向漸層的糊點，畫的時候壓扁成橢圓。
 // 每株一張 drawImage，不用每幀開 330 個 createRadialGradient
 function buildShade(){
-  shade = mk(64, 64);
+  if(!shade) shade = mk(64, 64);
   if(!shade) return;
-  const g = shade.g, c = SHADE.join(',');
+  const g = shade.g, c = PAL.shade;
+  g.clearRect(0, 0, 64, 64);                    // 外圈那圈是透明的，換色時蓋不掉舊的
   const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  gr.addColorStop(0, 'rgba(' + c + ',.62)');
-  gr.addColorStop(0.40, 'rgba(' + c + ',.46)');
-  gr.addColorStop(0.72, 'rgba(' + c + ',.16)');
-  gr.addColorStop(1, 'rgba(' + c + ',0)');
+  gr.addColorStop(0, rgba(c, .62));
+  gr.addColorStop(0.40, rgba(c, .46));
+  gr.addColorStop(0.72, rgba(c, .16));
+  gr.addColorStop(1, rgba(c, 0));
   g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
 }
 
 function buildAtlas(){
   atlas = mk(TILE * STAGES, TILE * VARS);
+  atlasL = mk(TILE * STAGES, TILE * VARS);
   if(!atlas) return;
   const g = atlas.g;
   for(let v = 0; v < VARS; v++)
@@ -437,19 +618,46 @@ function buildAtlas(){
     }
 }
 
+// 花的受光。整片田重畫一次 atlas 要 96 朵 × 13 片帶漸層的花瓣，每分鐘一次太貴 ——
+// 改成把光染上去：source-atop 只吃「已經有花」的像素，等於在 gamma 空間把每個
+// 像素往光色 lerp 一次，花瓣邊緣的柔度與 alpha 都原封不動。三次 drawImage 就結束
+function tintAtlas(){
+  if(!atlas || !atlasL) return;
+  const g = atlasL.g, w = TILE * STAGES, h = TILE * VARS;
+  g.clearRect(0, 0, w, h);
+  g.drawImage(atlas.e, 0, 0);
+  if(PAL.litA > 0.002 || Math.abs(PAL.exp) > 0.002){
+    g.globalCompositeOperation = 'source-atop';
+    if(PAL.litA > 0.002){
+      g.fillStyle = rgba(PAL.lit, PAL.litA.toFixed(3));
+      g.fillRect(0, 0, w, h);
+    }
+    // 再一道曝光（見「訊號夾制」）：往光源色提亮，或往黑壓暗。同樣只吃已經有花的像素，
+    // 所以花苞也一起變 —— 它們接的是同一道光
+    if(Math.abs(PAL.exp) > 0.002){
+      const a = Math.abs(PAL.exp).toFixed(3);
+      g.fillStyle = PAL.exp > 0 ? rgba(PAL.glow, a) : 'rgba(0,0,0,' + a + ')';
+      g.fillRect(0, 0, w, h);
+    }
+    g.globalCompositeOperation = 'source-over';
+  }
+}
+
 function buildSand(){
-  sand = mk(256, 256);
+  if(!sand) sand = mk(256, 256);
   if(!sand) return;
   const g = sand.g, img = g.createImageData(256, 256), d = img.data, rnd = mul32(77213);
+  const hi = PAL.grain[0], lo = PAL.grain[1];
   for(let i = 0; i < 256 * 256; i++){
     const n = rnd(), dark = rnd() < 0.5;
     const a = n < 0.55 ? 0 : (n - 0.55) / 0.45;       // 大部分透明，少數亮／暗顆粒
-    d[i * 4] = dark ? 122 : 255;
-    d[i * 4 + 1] = dark ? 104 : 251;
-    d[i * 4 + 2] = dark ? 82 : 240;
+    d[i * 4] = dark ? lo[0] : hi[0];
+    d[i * 4 + 1] = dark ? lo[1] : hi[1];
+    d[i * 4 + 2] = dark ? lo[2] : hi[2];
     d[i * 4 + 3] = Math.round(a * a * 54);
   }
   g.putImageData(img, 0, 0);
+  // CanvasPattern 抓的是建立當下的快照，同一張 canvas 重畫不會反映到舊 pattern 上
   sandPat = ctx.createPattern(sand.e, 'repeat');
 }
 
@@ -468,7 +676,7 @@ function groundCover(g){
     const x = sxOf(u, Math.min(v, ROWS - 1)), y = syOf(v);
     if(y < HZ + FOOT * 0.4 || y > MH + 20) continue;
     const s = scOf(v), L = HEAD * s * (0.34 + 0.52 * rnd());
-    g.strokeStyle = rnd() < 0.5 ? 'rgba(142,154,106,.34)' : 'rgba(168,174,128,.28)';
+    g.strokeStyle = rnd() < 0.5 ? rgba(PAL.cover[0], .34) : rgba(PAL.cover[1], .28);
     g.lineWidth = Math.max(1, HEAD * s * 0.032);
     g.beginPath();
     const lean = (rnd() - 0.5) * 0.6;
@@ -483,20 +691,22 @@ function groundCover(g){
 }
 
 // 天、海、乾沙都是靜態的，一次畫進離屏，每幀只 drawImage 一張
+// 三段漸層把 0..MH 蓋滿，所以換色票重畫時不必先清空
 function buildBg(){
-  bg = mk(MW, MH);
+  if(!bg || bg.e.width !== MW || bg.e.height !== MH) bg = mk(MW, MH);
   if(!bg) return;
   const g = bg.g;
   const sky = g.createLinearGradient(0, 0, 0, SKYH);
-  sky.addColorStop(0, SKY_HI); sky.addColorStop(1, SKY_LO);
+  sky.addColorStop(0, rgb(PAL.sky[0])); sky.addColorStop(1, rgb(PAL.sky[1]));
   g.fillStyle = sky; g.fillRect(0, 0, MW, SKYH + 1);
 
   const sea = g.createLinearGradient(0, SKYH, 0, HZ);
-  sea.addColorStop(0, SEA_FAR); sea.addColorStop(1, SEA_NEAR);
+  sea.addColorStop(0, rgb(PAL.sea[0])); sea.addColorStop(1, rgb(PAL.sea[1]));
   g.fillStyle = sea; g.fillRect(0, SKYH, MW, HZ - SKYH + 1);
 
   const sd = g.createLinearGradient(0, HZ, 0, MH);
-  sd.addColorStop(0, SAND_LO); sd.addColorStop(0.35, SAND_HI); sd.addColorStop(1, SAND_LO);
+  sd.addColorStop(0, rgb(PAL.sand[1])); sd.addColorStop(0.35, rgb(PAL.sand[0]));
+  sd.addColorStop(1, rgb(PAL.sand[1]));
   g.fillStyle = sd; g.fillRect(0, HZ, MW, MH - HZ);
   if(sandPat){ g.fillStyle = sandPat; g.fillRect(0, HZ, MW, MH - HZ); }
 
@@ -504,9 +714,9 @@ function buildBg(){
 
   // 岸線那道永遠在的碎浪：海跟沙之間不能是一條硬邊
   const fo = g.createLinearGradient(0, HZ - BAND * 0.016, 0, HZ + BAND * 0.020);
-  fo.addColorStop(0, 'rgba(255,255,255,0)');
-  fo.addColorStop(0.45, 'rgba(255,255,255,.78)');
-  fo.addColorStop(1, 'rgba(255,255,255,0)');
+  fo.addColorStop(0, rgba(PAL.foam, 0));
+  fo.addColorStop(0.45, rgba(PAL.foam, .78));
+  fo.addColorStop(1, rgba(PAL.foam, 0));
   g.fillStyle = fo; g.fillRect(0, HZ - BAND * 0.016, MW, BAND * 0.036);
 }
 
@@ -583,7 +793,7 @@ function spawnPetals(f, r){
     petals.push({ x: f.hx, y: f.hy, rot: r.rnd() * TAU, vr: (r.rnd() - 0.5) * 7,
                   vx: (r.rnd() - 0.45) * COLW * 1.3, vy: -COLW * (0.15 + 0.55 * r.rnd()),
                   t: 0, life: 1.5 + 1.0 * r.rnd(), L: f.r * 0.34,
-                  c: r.rnd() < 0.5 ? '#e0631f' : '#f0b93f' });
+                  c: rgb(PAL.pet[r.rnd() < 0.5 ? 0 : 1]) });
 }
 
 function stepParticles(dt){
@@ -738,26 +948,37 @@ function place(){
     f.x0 = x0; f.y0 = y0; f.sc = sc; f.w = w; f.len2 = len;
     f.hx = x0 + w * 0.30 * COLW * sc;           // 莖尖偏移
     f.hy = y0 - len;
-    // 開花那一刻整株才長到全尺寸：芽 0.80 倍、開花 1.12 倍。差的那 0.32 讓
-    // 沒開的格子退成一顆小點，數字的空心才空得乾淨
-    f.r = HEAD * sc * f.gz * (0.80 + 0.32 * f.bloom);
+    // 開花那一刻整株才長到全尺寸：芽 0.80 倍、開花 1.12·OPEN_K 倍。差的那一截讓
+    // 沒開的格子退成一顆小點，數字的空心才空得乾淨。
+    // 只有花頭吃 OPEN_K，莖高（上面那行）不跟：抽高的是開花的那一株，它一長高就
+    // 往上一列的空格靠過去 —— 實測把莖也乘 OPEN_K，1.25 檔的 0 中間那個洞會被
+    // 「下面一列那朵抽高的花」從底下填掉（全域掃描最小間距 +13.8，直接失守）
+    f.r = HEAD * sc * f.gz * (0.80 + (1.12 * OPEN_K - 0.80) * f.bloom);
     f.dim = f.bloom < 0.02 && !f.want;               // 這一株現在是背景，不是訊號
   }
 }
 
-// 落地陰影：正午光 → 每一株在自己腳邊投一枚短而柔的冷灰影。這一刀同時解兩件事 ——
-// 花與沙的分離度改由「明度階差」提供，瓣端的金黃就不必再為了跟白沙拉開而讓位；
+// 落地陰影：每一株在自己腳邊投一枚柔影。這一刀同時解兩件事 ——
+// 花與沙的分離度改由「明度階差」提供，瓣端的金黃就不必再為了跟沙拉開而讓位；
 // 整片田也因為接了地而長出體積，不再像一片貼在沙上的色紙。
-// 它只吃 f.r／f.x0／f.hx／f.bloom，全是靜止窗口裡不會變的量，所以影子跟花一樣不動
+// 長度與方向跟著太陽走：清晨長影偏西、正午縮成腳邊的圓點、黃昏長影偏東、
+// 夜裡沒有方向性的光就只剩一圈很淡的暗。但拉長的幅度要跟著 bloom 走 ——
+// 330 株全部拖一條等長的影子，畫面會變成一地跟花沒有關係的橫槓，而且影子會飄離
+// 花腳。沒開的那些貼著地、影子本來就短，長影子只發給開著的花，順便再幫數字帶
+// 多一層方向感；位移壓在 0.40r 以內，影子才咬得住花腳。
+// 它只吃 f.r／f.x0／f.hx／f.bloom 與色票，全是靜止窗口裡不會變的量，所以影子跟花一樣不動
 function drawShadows(){
+  const el = PAL.shL - 1.02, dir = PAL.shD;
   for(const f of field){
-    const rx = f.r * 1.02, ry = f.r * 0.42;
-    const cx = f.x0 + (f.hx - f.x0) * 0.70, cy = f.y0 + f.r * 0.16;
+    const rx = f.r * (1.02 + el * f.bloom);
+    const ry = f.r * (0.42 - 0.10 * f.bloom * Math.abs(dir));   // 影子拉長就跟著變窄
+    const cx = f.x0 + (f.hx - f.x0) * 0.70 + f.r * 0.40 * dir * f.bloom;
+    const cy = f.y0 + f.r * 0.16;
     // 沒開的那些影子淡一階：它們是地被，不是訊號
-    if(f.dim) ctx.globalAlpha = 0.6;
+    ctx.globalAlpha = f.dim ? PAL.shA * 0.6 : PAL.shA;
     ctx.drawImage(shade.e, cx - rx, cy - ry, rx * 2, ry * 2);
-    if(f.dim) ctx.globalAlpha = 1;
   }
+  ctx.globalAlpha = 1;
 }
 
 // 莖：330 條收成一條 path、一次 fill()。填的是帶錐度的多邊形而不是 stroke，
@@ -776,7 +997,7 @@ function drawStems(){
       ctx.quadraticCurveTo(cx + hw * 0.6, cy, f.x0 + hw, f.y0);
       ctx.closePath();
     }
-    ctx.fillStyle = pass ? STEM : STEM_DIM; ctx.fill();
+    ctx.fillStyle = rgb(pass ? PAL.green[0] : PAL.green[2]); ctx.fill();
   }
 }
 
@@ -798,7 +1019,7 @@ function drawLeaves(){
       const sw = f.w * 0.35 * COLW * f.sc;
       leafPath(bx, by, bx + f.side * L + sw, by + L * 0.34, w);
     }
-    ctx.fillStyle = pass ? LEAF : LEAF_DIM; ctx.fill();
+    ctx.fillStyle = rgb(pass ? PAL.green[1] : PAL.green[3]); ctx.fill();
   }
 }
 
@@ -810,7 +1031,7 @@ function drawHeads(){
     const al = f.dim ? BUD_A : 1;
     if(!w && !wilt && f.flip > 0){               // 靜止時連 transform 都不設，省得浮點抖
       if(al !== 1) ctx.globalAlpha = al;
-      ctx.drawImage(atlas.e, st * TILE, f.va * TILE, TILE, TILE,
+      ctx.drawImage(atlasL.e, st * TILE, f.va * TILE, TILE, TILE,
                     f.hx - f.r, f.hy - f.r, f.r * 2, f.r * 2);
       if(al !== 1) ctx.globalAlpha = 1;
       continue;
@@ -825,7 +1046,7 @@ function drawHeads(){
       ctx.translate(0, f.r * 0.18 * (1 - f.bloom));
       ctx.scale(1, 0.66 + 0.34 * f.bloom);
     }
-    ctx.drawImage(atlas.e, st * TILE, f.va * TILE, TILE, TILE, -f.r, -f.r, f.r * 2, f.r * 2);
+    ctx.drawImage(atlasL.e, st * TILE, f.va * TILE, TILE, TILE, -f.r, -f.r, f.r * 2, f.r * 2);
     ctx.restore();
   }
 }
@@ -838,7 +1059,7 @@ function drawSea(){
     const fy = rnd(), x = rnd() * MW, len = (0.03 + 0.09 * rnd()) * MW;
     const y = SKYH + (HZ - SKYH) * (0.10 + 0.86 * fy * fy);
     const xx = x + windAt(gustNow, (x / MW) * COLS, 0) * 0.03 * MW;
-    ctx.strokeStyle = 'rgba(255,255,255,' + (0.10 + 0.28 * fy).toFixed(3) + ')';
+    ctx.strokeStyle = rgba(PAL.foam, (0.10 + 0.28 * fy).toFixed(3));
     ctx.lineWidth = Math.max(1, (0.6 + 1.8 * fy) * dpr);
     ctx.beginPath(); ctx.moveTo(xx, y); ctx.lineTo(xx + len * (0.6 + 0.4 * fy), y); ctx.stroke();
   }
@@ -863,12 +1084,12 @@ function drawWet(){
   ctx.closePath();
   ctx.save(); ctx.clip();
   ctx.globalAlpha = a * 0.85;
-  ctx.fillStyle = SAND_WET; ctx.fillRect(0, top, MW, MH - top);
+  ctx.fillStyle = rgb(PAL.sand[2]); ctx.fillRect(0, top, MW, MH - top);
   ctx.globalAlpha = a;
   const gl = ctx.createLinearGradient(0, top, 0, MH);
-  gl.addColorStop(0, 'rgba(207,230,240,.34)');
-  gl.addColorStop(0.5, 'rgba(190,218,232,.16)');
-  gl.addColorStop(1, 'rgba(190,218,232,.05)');
+  gl.addColorStop(0, rgba(PAL.wet[0], .34));
+  gl.addColorStop(0.5, rgba(PAL.wet[1], .16));
+  gl.addColorStop(1, rgba(PAL.wet[2], .05));
   ctx.fillStyle = gl; ctx.fillRect(0, top, MW, MH - top);
   ctx.restore();
   ctx.globalAlpha = 1;
@@ -893,16 +1114,16 @@ function drawWater(){
   ctx.lineTo(px[N] + MW, YB); ctx.lineTo(px[0] - MW, YB);
   ctx.closePath();
   const g = ctx.createLinearGradient(0, top, 0, MH);
-  g.addColorStop(0, 'rgba(238,250,252,.92)');
-  g.addColorStop(0.05, 'rgba(170,214,222,.80)');
-  g.addColorStop(0.35, 'rgba(112,170,190,.62)');
-  g.addColorStop(1, 'rgba(84,138,164,.48)');
+  g.addColorStop(0, rgba(PAL.water[0], .92));
+  g.addColorStop(0.05, rgba(PAL.water[1], .80));
+  g.addColorStop(0.35, rgba(PAL.water[2], .62));
+  g.addColorStop(1, rgba(PAL.water[3], .48));
   ctx.fillStyle = g; ctx.fill();
 
   ctx.beginPath();
   ctx.moveTo(px[0], py[0]);
   for(let i = 1; i <= N; i++) ctx.lineTo(px[i], py[i]);
-  ctx.strokeStyle = 'rgba(255,255,255,.85)';
+  ctx.strokeStyle = rgba(PAL.foam, .85);
   ctx.lineWidth = Math.max(1.5, COLW * 0.10);
   ctx.lineJoin = 'round'; ctx.stroke();
 }
@@ -911,7 +1132,7 @@ function drawParticles(){
   for(const p of foam){
     const k = 1 - p.t / p.life;
     ctx.globalAlpha = Math.pow(k, 0.6) * 0.9;
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = rgb(PAL.foam);
     ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (0.5 + 0.5 * k), 0, TAU); ctx.fill();
   }
   for(const p of petals){
@@ -925,16 +1146,19 @@ function drawParticles(){
   ctx.globalAlpha = 1;
 }
 
-// 過曝：海邊的正午本來就洗掉一層對比，頂部再加一圈很淡的光暈。
-// 但它是蓋在花上面的：原本的 .10 平洗 ＋ .34 光暈剛好蓋在數字帶最上面兩列，
-// 把已經只剩一成的花／沙對比再吃掉一截。氛圍留著，強度砍半
+// 過曝與光暈：光暈的圓心就釘在太陽（夜裡是月亮）那個位置 —— 正午在畫面上緣外，
+// 所以是一片從頂部灑下來的平洗；黃昏壓在左邊的海平面上，就變成一道斜光。
+// 它是蓋在花上面的，所以強度要克制：原本的 .10 平洗 ＋ .34 光暈剛好蓋在數字帶
+// 最上面兩列，把已經只剩一成的花／沙對比再吃掉一截。氛圍留著，強度砍半
 function drawGlare(){
-  ctx.fillStyle = 'rgba(255,248,235,.05)';
+  ctx.fillStyle = rgba(PAL.wash, PAL.washA.toFixed(3));
   ctx.fillRect(0, 0, MW, MH);
-  const g = ctx.createRadialGradient(MW * 0.5, -MH * 0.12, 0, MW * 0.5, -MH * 0.12, MH * 0.7);
-  g.addColorStop(0, 'rgba(255,252,240,.20)');
-  g.addColorStop(1, 'rgba(255,252,240,0)');
-  ctx.fillStyle = g; ctx.fillRect(0, 0, MW, MH * 0.6);
+  const sx = MW * PAL.sunX, sy = SKYH * PAL.sunY;
+  const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, MH * PAL.glowR);
+  g.addColorStop(0, rgba(PAL.glow, PAL.glowA.toFixed(3)));
+  g.addColorStop(0.45, rgba(PAL.glow, (PAL.glowA * 0.38).toFixed(3)));
+  g.addColorStop(1, rgba(PAL.glow, 0));
+  ctx.fillStyle = g; ctx.fillRect(0, 0, MW, MH);
 }
 
 function render(){
@@ -970,10 +1194,17 @@ function layout(){
   // 欄寬由「最近那一排數字要塞得進畫面」反推，剩下的排自然往兩側溢出去，
   // 最前排被畫面切掉一截才像一片田，不是一塊擺好的看板
   const vD = SLOTS[SLOTS.length - 1].v + 6, span = PORT ? 10 : 23;
-  COLW = MW * 0.92 / (span * xkOf(vD));
-  // 開花的花徑必須小於格距的 GAP 倍，5×7 點陣的筆畫之間才留得住「空」。這條是這座鐘
-  // 可讀性的關鍵：原本 HEAD=0.86·COLW，相鄰兩朵重疊近一半，一位數字糊成一團橘色。
-  // 花瓣尖端畫到 sprite 的邊，所以畫出來的直徑就是 2·HEAD·sc(v)·gz·1.12。
+  // 0.92 是「數字帶吃掉幾成畫面寬」。這個數字對橫式（23 個欄距）沒問題，對直式
+  // （只有 10 個欄距）會切到字：最外側那一欄的圓心離邊只剩 0.04·MW，而一朵開花的
+  // 半徑是 OPEN·欄距/2 ≈ 0.046·MW —— 420x900 實測最外欄的開花被切掉 10px（約直徑
+  // 的 14%），0 的左框與 4 的斜邊在畫面邊上斷開。邊界條件直接寫成式子：
+  // 半個字帶 ＋ 抖動 ＋ 半朵開花 要塞得進半個畫面。橫式算出來是 0.942 > 0.92，
+  // 取 min 之後橫式一個像素都沒動，只有直式收到 0.877
+  const fill = Math.min(0.92, span / (span + OPEN + 0.16));
+  COLW = MW * fill / (span * xkOf(vD));
+  // HEAD 是「一格能站多大一株」的基準：花苞與莖葉的尺寸就吃 GAP 這一格距預算，
+  // 開花的再乘 OPEN_K（見 place()）。花瓣尖端畫到 sprite 的邊，所以一朵花苞畫出來的
+  // 直徑是 2·HEAD·sc(v)·gz·0.80、開花的是同一式子換成 1.12·OPEN_K。
   // 橫式卡在欄距、直式卡在列距（17 列擠在同一片沙上），寫死一個係數一定有一邊失守 ——
   // 數字帶每一列的兩個方向都算過取最小，換版面也不會破
   HEAD = Infinity;
@@ -983,13 +1214,16 @@ function layout(){
   }
   YB = syOf(NOWATER) + BAND * 0.1;
 
+  PAL_MIN = -1;
+  setTOD(todMin(timeStr()));
   buildField();
   buildWet();
   buildSand();
   buildAtlas();
+  tintAtlas();
   buildShade();
   buildBg();
-  HEADLESS = !(atlas && sand && bg && sandPat && shade);
+  HEADLESS = !(atlas && atlasL && sand && bg && sandPat && shade);
 
   foam.length = 0; petals.length = 0;
   runs.length = 0; drawn = ''; introPending = true; dirty = true;
@@ -1007,6 +1241,11 @@ function frame(now){
   // 時間變了就吃掉最新目標、手上那輪直接重跑，不排隊 —— 連跳好幾分鐘也會收斂
   if(t !== (r ? r.to : drawn)) start(t);
   else if(r) step(r, dt);
+  // 光跟著「已經寫上去的那個時刻」走，跟 dataset.shown 同一個節拍：潮水還在爬的
+  // 那幾秒鐘畫面上寫的還是舊的分鐘，天色也就還是舊的那一階，兩件事一起翻頁
+  if(setTOD(todMin(drawn || t)) && !HEADLESS){
+    buildSand(); buildShade(); buildBg(); tintAtlas(); dirty = true;
+  }
   soak(runs[0], dt);
   grow(dt);
   stepParticles(dt);

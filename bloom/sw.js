@@ -1,5 +1,5 @@
 // 潮汐花鐘 service worker
-const VERSION = 'bloom-v1';
+const VERSION = 'bloom-v2';
 const SHELL = [
   './',
   './index.html',
