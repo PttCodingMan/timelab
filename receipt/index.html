@@ -105,7 +105,7 @@ const GRAV   = 1.2;    // 撕下來那張的重力：每秒加速幾個畫面高
 const L_TOT = 24.9;    // 總行數 = 收據高
 const L_BIG = 5.35;    // 大字帶上緣（行）
 const BIG_H = 5.2;     // 大字高（行）
-const REVEAL = L_BIG + BIG_H;   // 送到這一行，大字最後一排點才真的畫出來
+const REVEAL = L_BIG + BIG_H;   // 大字底緣距張頂的偏移（行）；出紙口揭露門檻用它換算
 
 // ── 5x7 點陣：每個點畫成一顆小方塊，放大後就是熱感機的顆粒感。
 // 自刻是因為模擬器的 measureText 固定回 {width:10}，版面不能靠文字量測 ──
@@ -198,9 +198,10 @@ function tearOff(m){
 const easeOut = t => 1 - Math.pow(1-t, 3);
 const feed = () => runs.length ? RH*easeOut(Math.min(1, runs[0].t/T_FEED)) : RH;
 
-// 收據 j 的上緣。j=0 釘在出紙口不動，內容用 clip 一行行揭露；
-// 底下那幾張整批往下走
-const topOf = (j, fed) => j ? HEAD + fed + (j-1)*RH : HEAD;
+// 收據 j 的上緣：新張（j=0）跟整批舊張用同一顆式子，一起往下捲。
+// 新張從 HEAD-RH 起算（整張還沒探出出紙口），fed 長到 RH 時上緣抵達 HEAD——
+// 尾巴（撕線那端）先探出出紙口，大字（版面偏上）壓軸最後才露臉，這是倒掛熱感頭的物理正解
+const topOf = (j, fed) => HEAD + fed + (j-1)*RH;
 
 // 撕的門檻就是掉落線：最下面那張的上緣撕線垂過 DROP 就直接撕開。
 // instant 是追趕用的：一次補幾百分鐘時不能讓幾百張同時飛出來，直接丟掉不補動畫
@@ -373,27 +374,17 @@ function draw(){
 function tape(fed){
   const x = CX - RW/2;
   ctx.save();
-  ctx.beginPath(); ctx.rect(x - LH, HEAD, RW + LH*2, DROP - HEAD); ctx.clip();
-  // 最上面那張是正在印的：clip 到已經送出來的長度，圖案就一行行從出紙口冒出來
-  ctx.save();
-  ctx.beginPath(); ctx.rect(x - LH, HEAD, RW + LH*2, Math.max(0, fed)); ctx.clip();
-  receipt(strip[0], x, HEAD);
-  ctx.restore();
-  for(let j=1; j<strip.length; j++){
+  ctx.beginPath(); ctx.rect(x - LH, HEAD, RW + LH*2, H - HEAD); ctx.clip();
+  // 全部張用同一顆 topOf，新張（j=0）不再特例：出紙口只是個固定的觀察窗，
+  // 紙帶本身照樣整條往下捲，末端垂出畫面外，撕邊乾淨、不用淡出遮
+  for(let j=0; j<strip.length; j++){
     const top = topOf(j, fed);
-    if(top > DROP) break;
+    if(top > H) break;
     receipt(strip[j], x, top);
   }
-  // 紙帶垂過掉落線之前那一小段淡入背景色：收尾不是被硬邊切一刀
-  const fadeH = LH*2.2;
-  const fade = ctx.createLinearGradient(0, DROP - fadeH, 0, DROP);
-  fade.addColorStop(0, 'rgba(27,24,21,0)');
-  fade.addColorStop(1, 'rgba(27,24,21,1)');
-  ctx.fillStyle = fade;
-  ctx.fillRect(x - LH, DROP - fadeH, RW + LH*2, fadeH);
   ctx.restore();
-  // 大字最後一排點真的畫出來的那一幀才算數
-  if(fed >= REVEAL*LH) shown(strip[0]);
+  // 大字最後一排點真的從出紙口露出的那一幀才算數：尾巴先出，鏡著舊式子换算
+  if(fed >= RH - REVEAL*LH) shown(strip[0]);
 }
 
 // 出紙口＋印字頭紅光，固定不動
