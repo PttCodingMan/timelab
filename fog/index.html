@@ -406,6 +406,7 @@ function beat(sp){
 // 擦、呵氣、爬回全都只是對 mask 做加減，其餘程式碼一行都不用知道發生什麼事。
 let bgSharp = null, bgFog = null, mask = null, scr = null, HEADLESS = true;
 let body = null, flank = null, dot = null;   // 指腹的三枚 sprite，見 makePads()
+let maskPrev = null, mix = null;             // 爬回的上一步快照與顯示用的補間，見 rest()
 
 // 模擬環境只有 id='c' 那張 canvas 有 getContext，createElement 出來的沒有。
 // 任一張開不出來就設 HEADLESS，繪圖整條路徑跳過，狀態機照跑
@@ -443,8 +444,9 @@ function layout(){
 
   polys = {};
   bgSharp = mk(MW, MH); bgFog = mk(MW, MH); mask = mk(MW, MH); scr = mk(MW, MH);
+  maskPrev = mk(MW, MH); mix = mk(MW, MH);
   makePads();
-  HEADLESS = !(bgSharp && bgFog && mask && scr && body && flank && dot);
+  HEADLESS = !(bgSharp && bgFog && mask && scr && maskPrev && mix && body && flank && dot);
   if(!HEADLESS){ paintBg(); paintFog(); seal(); }
   runs.length = 0; drawn = ''; dirty = true;   // 進場與 resize 之後走同一套，不特別處理
 }
@@ -704,7 +706,7 @@ function creep(){
 // ── 狀態 ────────────────────────────────────────────────────────
 // runs 這個名字是硬性的：tools/simulate.js 的探針直接讀 runs.length。
 // 爬回不算 run（它從不結束），所以檢查點永遠是 0
-let drawn = '', runs = [], cut = [0,0,0,0], idle = 0, acc = 0, dirty = true;
+let drawn = '', runs = [], cut = [0,0,0,0], idle = 0, acc = 0, dirty = true, prevOK = 0;
 
 function commit(){ document.documentElement.dataset.shown = drawn; }
 
@@ -717,6 +719,7 @@ function start(to){
   runs.length = 0;
   runs.push({ to, t: 0, dot: 0 });
   cut = [0,0,0,0];
+  prevOK = 0;
 }
 
 // 刷子沿弧長走一個固定格子，第 n 枚永遠蓋在 n*STEP 上，而且一枚只蓋一次。
@@ -771,7 +774,18 @@ function rest(dt){
   idle += dt;
   if(idle < T_HOLD) return;                     // 停住：不爬，讓人把時間看完
   acc += dt;
-  while(acc >= TICK){ acc -= TICK; if(!HEADLESS) creep(); dirty = true; }
+  while(acc >= TICK){ acc -= TICK;
+    if(!HEADLESS){
+      // 走這一步之前先把現況拍下來：顯示端要在「上一步→這一步」之間補間。
+      // 顯示因此落後模擬一個 tick，霧的總長多 2.5 秒 —— 沒人量得出來
+      maskPrev.g.globalCompositeOperation = 'copy';
+      maskPrev.g.drawImage(mask.e, 0, 0);
+      prevOK = 1; creep();
+    }
+  }
+  // mask 是 8-bit，tick 的步距不能再切小（每步低於 1/255 會被進位歸零、霧直接停住），
+  // 要無縫只能在顯示端把兩步 crossfade 起來 —— 代價是霧化期間每幀重繪，見 render()
+  if(prevOK) dirty = true;
 }
 
 // 每幀三次 drawImage，沒有 per-pixel JS
@@ -785,8 +799,18 @@ function render(){
   s.clearRect(0, 0, MW, MH);
   s.drawImage(bgFog.e, 0, 0);
   street(s, 2.2, 0.75);  // 白紗已經烘進 bgFog 了，這一份疊在上面，所以 alpha 要自己壓低
+  // 爬回的兩步之間做線性補間：copy 先放 (1-k) 的上一步，lighter 把 k 的這一步加上去。
+  // 兩係數和為 1，α 是凸組合不會爆 1；每幀只動一小截，2.5 秒一階的樓梯就消失了
+  let msk = mask;
+  if(prevOK){
+    const k = Math.min(1, acc/TICK), g = mix.g;
+    g.globalCompositeOperation = 'copy';    g.globalAlpha = 1 - k; g.drawImage(maskPrev.e, 0, 0);
+    g.globalCompositeOperation = 'lighter'; g.globalAlpha = k;     g.drawImage(mask.e, 0, 0);
+    g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+    msk = mix;
+  }
   s.globalCompositeOperation = 'destination-in';
-  s.drawImage(mask.e, 0, 0);
+  s.drawImage(msk.e, 0, 0);
   s.globalCompositeOperation = 'source-over';
   ctx.drawImage(scr.e, 0, 0);
 }
@@ -801,7 +825,7 @@ function frame(now){
   else if(r) step(r, dt);
   else rest(dt);
   if(!HEADLESS && streetMoves()) dirty = true;
-  // 一分鐘裡有五十幾秒畫面是靜止的（或一秒才動一次），沒變就別重貼三張全螢幕
+  // 寫字與停住的段落畫面靜止就不重貼；霧化段為了補間每幀都在動（見 rest）
   if(dirty){ render(); dirty = false; }
   requestAnimationFrame(frame);
 }
@@ -815,6 +839,9 @@ function drag(x, y){
   const dx = mv ? (x-px)/L : 1, dy = mv ? (y-py)/L : 0;
   // 真人的手速不套那條速度曲線 —— 那是拿來演「寫字」的，這裡的快慢是使用者自己的
   for(let i=1;i<=n;i++) stamp(px + (x-px)*i/n, py + (y-py)*i/n, BR*0.95, dx, dy, mv ? 1 : 3);
+  // 手擦的痕要立刻全亮，不能等下一 tick 才從補間裡浮出來：基準快照直接同步。
+  // 其他筆跡的補間會往前跳最多一個 tick 的量 —— 使用者正盯著自己的手指，看不到
+  if(prevOK){ maskPrev.g.globalCompositeOperation = 'copy'; maskPrev.g.drawImage(mask.e, 0, 0); }
   px = x; py = y; dirty = true;
 }
 addEventListener('pointerdown', e => { down = true; px = e.clientX*dpr; py = e.clientY*dpr; drag(px, py); });
