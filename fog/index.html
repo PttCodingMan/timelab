@@ -514,17 +514,55 @@ function streetMoves(){
 }
 
 function paintFog(){
-  const f = bgFog.g;
+  const f = bgFog.g, s = scr.g;
   f.globalCompositeOperation = 'source-over';
   // 先鋪一層底：blur 會從畫布外採到透明，四個邊會露出底下這份。墊清楚的那張
   // 而不是一塊單色 —— 夜色已經是漸層，墊死色會在下緣壓出一圈暗邊
   f.drawImage(bgSharp.e, 0, 0);
-  f.filter = 'blur(' + (18*dpr) + 'px)';
+  f.filter = 'blur(' + (14*dpr) + 'px)';
+  f.drawImage(bgSharp.e, 0, 0);
+  // 結露不是失焦。失焦（單純 blur）把亮暗一起攤平，整片是均勻的近視灰；結露是散射，
+  // 亮處的光往外滲一大圈、暗處維持暗。用 lighter 疊一份糊很開的亮部，只有燈長得出暈。
+  // 散射補了柔，底下那份 blur 就從 18 收到 14，擦開與沒擦開的反差反而更清楚
+  f.filter = 'blur(' + (42*dpr) + 'px)';
+  f.globalCompositeOperation = 'lighter';
+  f.globalAlpha = 0.28;
   f.drawImage(bgSharp.e, 0, 0);
   f.filter = 'none';
-  const v = f.createLinearGradient(0, 0, 0, MH);
+  f.globalAlpha = 1;
+  f.globalCompositeOperation = 'source-over';
+
+  // 兩張定種子噪聲，白色只在 alpha 上亂：粗的（10×6 拉滿版）當霧的厚薄斑、
+  // 細的（480×300）當微水珠。只在 layout 烘一次 —— 結露的顆粒本來就不會動
+  const noise = (w, h, seed) => {
+    const n = mk(w, h); if(!n) return null;
+    const img = n.g.createImageData(w, h), d = img.data, rnd = mul32(seed);
+    for(let i=0;i<d.length;i+=4){ d[i]=d[i+1]=d[i+2]=255; d[i+3]=rnd()*255|0; }
+    n.g.putImageData(img, 0, 0);
+    return n;
+  };
+  const mottle = noise(10, 6, 20260731), grain = noise(480, 300, 20260732);
+
+  // 白紗先進 scr、用噪聲蝕出厚薄再貼回 —— 蝕的是紗不是整份霧，薄處透出的是
+  // 底下的散射暈（還是霧的樣子），不是清晰的夜景。粗噪聲拉 blur 抹掉放大的方格感。
+  // 蝕的力道試過 0.35：整片變暗、字的對比跟著掉；0.20 是「看得出厚薄、紗還是亮的」
+  s.globalCompositeOperation = 'source-over';
+  s.clearRect(0, 0, MW, MH);
+  const v = s.createLinearGradient(0, 0, 0, MH);
   v.addColorStop(0, VEIL_HI); v.addColorStop(0.45, VEIL_MD); v.addColorStop(1, VEIL_LO);
-  f.fillStyle = v; f.fillRect(0, 0, MW, MH);
+  s.fillStyle = v; s.fillRect(0, 0, MW, MH);
+  if(mottle && grain){
+    s.globalCompositeOperation = 'destination-out';
+    s.filter = 'blur(' + (26*dpr) + 'px)';
+    s.globalAlpha = 0.20;
+    s.drawImage(mottle.e, 0, 0, MW, MH);
+    s.filter = 'none';
+    s.globalAlpha = 0.05;
+    s.drawImage(grain.e, 0, 0, MW, MH);
+    s.globalAlpha = 1;
+    s.globalCompositeOperation = 'source-over';
+  }
+  f.drawImage(scr.e, 0, 0);
 }
 
 // ── 遮罩：白＝有霧、透明＝已擦乾淨 ────────────────────────────────
