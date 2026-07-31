@@ -360,10 +360,10 @@ function mk(w, h){
 // ── 場景與投影 ──────────────────────────────────────────────────
 // 不做真 3D，一個投影函式就夠：花田用 (u,v) 網格，v=0 最遠、v=ROWS-1 最近。
 // SKYH 是真的水平線（天接海），HZ 是岸線 —— 花田最遠那一排剛好長在水邊，
-// 所以大潮推到 v=0 就是「水漲回海裡」，不用另外解釋兩條線的關係
+// 所以水從 v<0 那側（海）漫進來、退回 v<0 就是「縮回海裡」，不用另外解釋兩條線的關係
 let W = 0, H = 0, MW = 0, MH = 0, dpr = 1;
 let COLS = 30, ROWS = 11, PORT = false;
-let SKYH = 0, HZ = 0, BAND = 0, FOOT = 0, COLW = 0, HEAD = 0, NOWATER = 13, YB = 0;
+let SKYH = 0, HZ = 0, BAND = 0, FOOT = 0, COLW = 0, HEAD = 0, NOWATER = -1.7;
 let SLOTS = [], COLON = [], field = [];
 
 // 深度曲線。規格書的 d^1.35 配上 0.35 的縮放，列距與花徑的比值從最遠排到最近排差三倍：
@@ -373,7 +373,7 @@ let SLOTS = [], COLON = [], field = [];
 // （xkOf 只收斂一成多），花徑卻從上到下差 1.43 倍，於是「花徑／格距」在數字帶裡
 // 從 0.66 走到 0.92 —— 要嘛上面幾列小到讀不出來，要嘛下面幾列黏死。0.72 讓花徑
 // 與欄距同步，全帶都吃得滿 0.92 的預算。列距仍然 51→62px，深度感沒有掉。
-// v<0 也要有定義：水舌越過岸線時前緣會跑到海裡去
+// v 出界兩側都要有定義：沒水時前緣停在 v<0 的海裡，大潮推到底會越過 v=ROWS-1
 const S0 = 0.72, EB = -Math.log(S0), EK = S0 / (1 - S0);
 const depth = v => EK * (Math.exp(EB * v / (ROWS - 1)) - 1);
 // 最遠那排往下讓 FOOT，不然 v=0 的花頭會浮在海面上
@@ -744,8 +744,9 @@ function windAt(g, u, v){
 }
 
 // ── 潮 ──────────────────────────────────────────────────────────
-// 水舌不是整條橫線，是一片有寬度的舌狀水，只在「這次要變動的欄位」範圍內爬上來。
-// reach 0 = 沒有水，1 = 爬到最深；front(u) 是那一欄的水緣落在第幾列（小 = 遠 = 深）
+// 水舌不是整條橫線，是一片有寬度的舌狀水，從海那側（畫面上方、岸線 HZ）往觀者
+// 漫下來，只在「這次要變動的欄位」範圍內。
+// reach 0 = 沒有水，1 = 漫到最深；front(u) 是那一欄的水緣落在第幾列（大 = 近 = 深）
 function reachAt(r){
   const T = r.mode === 'small' ? SM : BIG, t = r.t;
   if(t <= 0) return 0;
@@ -772,17 +773,18 @@ function lobeAt(r, u){
 function frontAt(r, u){
   const s = shoulder(r, u);
   if(s <= 0) return NOWATER;
-  return NOWATER + (r.vT - lobeAt(r, u) - NOWATER) * r.reach * s;
+  return NOWATER + (r.vT + lobeAt(r, u) - NOWATER) * r.reach * s;
 }
 
 // ── 泡沫與被吹走的花瓣 ──────────────────────────────────────────
 // 兩種都有 lifetime，潮汐動畫結束前必須全部消光 —— 靜止窗口裡不能有任何東西在飄
 const foam = [], petals = [];
 
+// 碎沫往水舌推進的那一側（往下、往觀者）灑，不是往身後的海
 function spawnFoam(r, x, y, n, sp){
   for(let i = 0; i < n && foam.length < 300; i++){
     const a = r.rnd() * TAU, s = sp * (0.25 + 0.75 * r.rnd());
-    foam.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s * 0.4 - sp * 0.3,
+    foam.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s * 0.4 + sp * 0.3,
                 t: 0, life: 0.35 + 0.55 * r.rnd(), r: (0.05 + 0.10 * r.rnd()) * COLW });
   }
 }
@@ -829,8 +831,8 @@ function soak(r, dt){
     let live = false;
     if(r && r.reach > 0){
       const fv = frontAt(r, wu[i]);
-      if(fv < wv[i]) wv[i] = fv;
-      if(fv <= ROWS - 1){ wa[i] = 1; live = true; }
+      if(fv > wv[i]) wv[i] = fv;
+      if(fv >= 0){ wa[i] = 1; live = true; }
     }
     if(!live){
       wa[i] = Math.max(0, wa[i] - dt / DRY);
@@ -858,16 +860,17 @@ function start(to){
       if(f.want !== old[i]) (f.want ? r.op : r.cl).push(f);
     }
     if(!r.op.length && !r.cl.length){ drawn = to; commit(); return; }
-    let u0 = 1e9, u1 = -1e9, v0 = 1e9;
+    let u0 = 1e9, u1 = -1e9, v1 = -1e9;
     for(const f of r.op.concat(r.cl)){
-      u0 = Math.min(u0, f.uu); u1 = Math.max(u1, f.uu); v0 = Math.min(v0, f.vv);
+      u0 = Math.min(u0, f.uu); u1 = Math.max(u1, f.uu); v1 = Math.max(v1, f.vv);
     }
-    // 爬到最深那朵要變的花再多半列
-    r.uA = u0 - 0.5; r.uB = u1 + 0.5; r.vT = v0 - 0.5;
+    // 漫到最靠近觀者那朵要變的花再多半列
+    r.uA = u0 - 0.5; r.uB = u1 + 0.5; r.vT = v1 + 0.5;
   }else{
-    // 大潮／進場：蓋全場，所有開著的花重來一次 —— 退下去時整片田由遠到近開
+    // 大潮／進場：蓋全場，所有開著的花重來一次 —— 水往海的方向退，
+    // 近的先露出來，所以整片田是由近到遠重新開
     for(const f of field){ if(f.want) r.op.push(f); else if(f.bloom > 0) r.cl.push(f); }
-    r.uA = -3; r.uB = COLS + 2; r.vT = -1.6;   // 越過岸線，水緣直接接回海裡
+    r.uA = -3; r.uB = COLS + 2; r.vT = ROWS + 1.6;   // 淹過最前排，直接漫出畫面下緣
   }
   // 沒被水點到的花（上一輪沒收完的殘局）自己補完，不然會停在半開
   for(const f of field){
@@ -882,14 +885,14 @@ function start(to){
 function touch(r, f, role){
   const fv = frontAt(r, f.uu);
   if(!f.sub){
-    if(fv <= f.vv){                             // 水舌覆蓋到它的那一幀開始 wither
+    if(fv >= f.vv){                             // 水舌漫過它的那一幀開始 wither
       f.sub = 1; f.mode = 'close';
       if(f.bloom > 0.5) spawnPetals(f, r);
     }
     return;
   }
   // 水舌退離某朵花的那一幀，那朵花開始 bloom —— stagger 是水退的副作用，不另外寫
-  if(role === 1 && fv > f.vv && f.bloom < 1) f.mode = 'open';
+  if(role === 1 && fv < f.vv && f.bloom < 1) f.mode = 'open';
 }
 
 function grow(dt){
@@ -929,8 +932,9 @@ function edgeFoam(r, dt){
   for(let i = 0; i < n; i++){
     const u = r.uA - SHW + (r.uB - r.uA + SHW * 2) * r.rnd();
     const fv = frontAt(r, u);
-    if(fv >= NOWATER - 0.05) continue;
-    spawnFoam(r, sxOf(u, Math.min(fv, ROWS - 1)), syOf(fv), 1, COLW * 1.1);
+    if(fv <= NOWATER + 0.05) continue;
+    spawnFoam(r, sxOf(u, Math.min(Math.max(fv, 0), ROWS - 1)),
+              Math.max(syOf(fv), HZ), 1, COLW * 1.1);
   }
 }
 
@@ -1065,32 +1069,38 @@ function drawSea(){
   }
 }
 
-// 濕沙：水爬到過的地方壓深一階，再疊一層天空色低 alpha 的高光（反射）
+// 濕沙：水漫過的地方壓深一階，再疊一層天空色低 alpha 的高光（反射）
 function drawWet(){
   let a = 0;
   for(let i = 0; i < wa.length; i++) if(wa[i] > a) a = wa[i];
   if(a <= 0) return;
-  let top = MH;
-  ctx.beginPath();
+  // 濕沙那一塊掛在岸線上：上緣永遠是 HZ，下緣是水曾經漫到的最深處
+  let bot = HZ;
+  const qx = [], qy = [];
   for(let i = 0; i < wu.length; i++){
-    // 濕的是沙，不是海：水緣越過岸線的那一段不算進來
-    const v = Math.min(Math.max(wv[i], 0), NOWATER), y = syOf(v);
-    const x = sxOf(wu[i], Math.min(v, ROWS - 1));
-    if(y < top) top = y;
-    if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    // 濕的是沙，不是海：水緣退回岸線以上的那一段不算進來
+    const v = wv[i], y = Math.max(syOf(v), HZ);
+    qx.push(sxOf(wu[i], Math.min(Math.max(v, 0), ROWS - 1))); qy.push(y);
+    if(y > bot) bot = y;
   }
-  ctx.lineTo(sxOf(wu[wu.length - 1], ROWS - 1) + MW, YB);
-  ctx.lineTo(sxOf(wu[0], ROWS - 1) - MW, YB);
+  if(bot <= HZ + 1) return;
+  ctx.beginPath();
+  for(let i = 0; i < qx.length; i++){
+    if(i === 0) ctx.moveTo(qx[i], qy[i]); else ctx.lineTo(qx[i], qy[i]);
+  }
+  ctx.lineTo(sxOf(wu[wu.length - 1], ROWS - 1) + MW, HZ);
+  ctx.lineTo(sxOf(wu[0], ROWS - 1) - MW, HZ);
   ctx.closePath();
   ctx.save(); ctx.clip();
   ctx.globalAlpha = a * 0.85;
-  ctx.fillStyle = rgb(PAL.sand[2]); ctx.fillRect(0, top, MW, MH - top);
+  ctx.fillStyle = rgb(PAL.sand[2]); ctx.fillRect(0, HZ, MW, bot - HZ);
   ctx.globalAlpha = a;
-  const gl = ctx.createLinearGradient(0, top, 0, MH);
+  // 靠海那頭最後才離開水，所以最濕；離海最遠的下緣先乾
+  const gl = ctx.createLinearGradient(0, HZ, 0, bot);
   gl.addColorStop(0, rgba(PAL.wet[0], .34));
   gl.addColorStop(0.5, rgba(PAL.wet[1], .16));
   gl.addColorStop(1, rgba(PAL.wet[2], .05));
-  ctx.fillStyle = gl; ctx.fillRect(0, top, MW, MH - top);
+  ctx.fillStyle = gl; ctx.fillRect(0, HZ, MW, bot - HZ);
   ctx.restore();
   ctx.globalAlpha = 1;
 }
@@ -1100,20 +1110,23 @@ function drawWater(){
   if(!r || r.reach <= 0) return;
   const u0 = r.uA - SHW, u1 = r.uB + SHW, N = 96;
   const px = [], py = [];
-  let top = MH * 4;
+  // 水舌接在岸線上：上緣永遠是 HZ，前緣（下緣）是這一幀漫到的最深處
+  let bot = HZ;
   for(let i = 0; i <= N; i++){
     const u = u0 + (u1 - u0) * i / N;
-    const fv = Math.min(frontAt(r, u), NOWATER);
-    const y = syOf(fv);
-    px.push(sxOf(u, Math.min(fv, ROWS - 1))); py.push(y);
-    if(y < top) top = y;
+    const fv = frontAt(r, u);
+    const y = Math.max(syOf(fv), HZ);
+    px.push(sxOf(u, Math.min(Math.max(fv, 0), ROWS - 1))); py.push(y);
+    if(y > bot) bot = y;
   }
+  if(bot <= HZ + 1) return;                     // 前緣還沒鑽出岸線，這一幀沒有水可畫
   ctx.beginPath();
   ctx.moveTo(px[0], py[0]);
   for(let i = 1; i <= N; i++) ctx.lineTo(px[i], py[i]);
-  ctx.lineTo(px[N] + MW, YB); ctx.lineTo(px[0] - MW, YB);
+  ctx.lineTo(px[N] + MW, HZ); ctx.lineTo(px[0] - MW, HZ);
   ctx.closePath();
-  const g = ctx.createLinearGradient(0, top, 0, MH);
+  // 最亮那一階留在推進的前緣，往海那頭愈透明 —— 水舌是從海裡接出來的
+  const g = ctx.createLinearGradient(0, bot, 0, HZ);
   g.addColorStop(0, rgba(PAL.water[0], .92));
   g.addColorStop(0.05, rgba(PAL.water[1], .80));
   g.addColorStop(0.35, rgba(PAL.water[2], .62));
@@ -1189,7 +1202,9 @@ function layout(){
   SLOTS = slotsFor();
   // 冒號跟著數字帶走：7 列的字帶從 SLOTS[0].v 起算，兩點落在第 3、5 列才在字高的中間
   COLON = PORT ? [] : [SLOTS[0].v + 2, SLOTS[0].v + 4];
-  NOWATER = ROWS + 2;
+  // 沒有水的時候前緣停在海裡。-0.14·(ROWS-1) 換算過去大約在岸線再往上 5% BAND，
+  // 兩種版面（13 列／17 列）都躲得進海裡，reach 一離開 0 前緣就從岸線鑽出來
+  NOWATER = -0.14 * (ROWS - 1);
   SKYH = 0.10 * MH; HZ = 0.22 * MH; BAND = MH - HZ; FOOT = BAND * 0.05;
   // 欄寬由「最近那一排數字要塞得進畫面」反推，剩下的排自然往兩側溢出去，
   // 最前排被畫面切掉一截才像一片田，不是一塊擺好的看板
@@ -1212,7 +1227,6 @@ function layout(){
     const pitch = Math.min(COLW * xkOf(v), (BAND - FOOT) * (depth(v + 1) - depth(v)));
     HEAD = Math.min(HEAD, GAP * pitch / (2 * scOf(v) * GZ_MAX * 1.12));
   }
-  YB = syOf(NOWATER) + BAND * 0.1;
 
   PAL_MIN = -1;
   setTOD(todMin(timeStr()));
